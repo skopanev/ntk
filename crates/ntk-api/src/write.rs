@@ -1038,8 +1038,54 @@ pub async fn set_modules(
 /// работы, а здесь ссылка уже существует и обязана остаться рабочей — ровно то
 /// разделение, ради которого заводился archived_at (sql/017).
 pub(crate) fn modules_missing_in_target(source: &[String], target: &[String]) -> Vec<String> {
-    let have: std::collections::BTreeSet<&str> = target.iter().map(String::as_str).collect();
-    let mut miss: Vec<String> = source
+    absent_from(source, target)
+}
+
+/// Имена, похожие на промах настолько, что их стоит предложить.
+///
+/// Подстроки одной опечатки не ловят: `fbak` не содержит `proj-b` и не
+/// содержится в нём, а имелся в виду именно он. Поэтому расстояние
+/// редактирования, а не вхождение — пропущенная, лишняя или переставленная
+/// буква остаётся в пределах двух правок.
+pub(crate) fn near_misses(asked: &str, known: &[String]) -> Vec<String> {
+    let mut near: Vec<(usize, String)> = known
+        .iter()
+        .filter_map(|k| {
+            if k.contains(asked) || asked.contains(k.as_str()) {
+                return Some((0, k.clone()));
+            }
+            let d = edit_distance(asked, k);
+            (d <= 2).then_some((d, k.clone()))
+        })
+        .collect();
+    near.sort();
+    near.into_iter().take(5).map(|(_, k)| k).collect()
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Какие из названных имён отсутствуют среди известных.
+///
+/// Общая для модулей, статусов и проектов: вопрос «что из спрошенного мы не
+/// знаем» один и тот же, а ответ на него всюду обязан быть списком имён, а не
+/// пустой выдачей. Пустая выдача — тот же ноль, что и «ничего не подошло», и
+/// отличить опечатку от ответа по ней нельзя.
+pub(crate) fn absent_from(asked: &[String], known: &[String]) -> Vec<String> {
+    let have: std::collections::BTreeSet<&str> = known.iter().map(String::as_str).collect();
+    let mut miss: Vec<String> = asked
         .iter()
         .filter(|m| !have.contains(m.as_str()))
         .cloned()
@@ -1258,6 +1304,39 @@ mod project_lifecycle_tests {
     #[test]
     fn tickets_without_modules_never_block_the_move() {
         assert!(modules_missing_in_target(&[], &[]).is_empty());
+    }
+
+    // Тот же вопрос для статусов и проектов: опечатка обязана назваться, а не
+    // раствориться в пустой выдаче.
+    // Ради этого случая проверка и заводилась: опечатка в одну букву.
+    #[test]
+    fn a_one_letter_typo_finds_its_target() {
+        let near = super::near_misses("fbak", &["proj-b".into(), "proj-a".into(), "ntk".into()]);
+        assert!(near.contains(&"proj-b".to_string()), "не предложен proj-b: {near:?}");
+    }
+
+    #[test]
+    fn a_name_unlike_anything_gets_no_suggestions() {
+        let near = super::near_misses("zzzzzzzz", &["proj-b".into(), "ntk".into()]);
+        assert!(near.is_empty(), "выдуманы похожие: {near:?}");
+    }
+
+    #[test]
+    fn a_mistyped_status_is_named_not_swallowed() {
+        let unknown = super::absent_from(
+            &["open".into(), "in_progres".into()],
+            &["open".into(), "in_progress".into(), "done".into()],
+        );
+        assert_eq!(unknown, vec!["in_progres".to_string()]);
+    }
+
+    #[test]
+    fn a_list_of_known_statuses_passes_whole() {
+        let unknown = super::absent_from(
+            &["open".into(), "blocked".into()],
+            &["open".into(), "blocked".into(), "done".into()],
+        );
+        assert!(unknown.is_empty(), "исправный список отвергнут: {unknown:?}");
     }
 
     #[test]

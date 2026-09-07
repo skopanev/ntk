@@ -351,7 +351,14 @@ pub(crate) async fn tickets(
 
     let limit = q.limit.clamp(1, 500);
     let offset = q.offset.max(0);
-    let status = q.status.clone();
+    // Статус — СПИСОК, как и теги: «покажи открытые и заблокированные» —
+    // обычный вопрос, и старый инструмент на него отвечал (JS, 684b8fb).
+    // Переписывание на Rust это потеряло, а `status = $1` с "open,blocked"
+    // молча отдавал ноль: ответ, неотличимый от «ничего не подходит».
+    let statuses: Option<Vec<String>> = q.status.as_deref().map(|t| {
+        t.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
+    });
+    let statuses = statuses.filter(|v: &Vec<String>| !v.is_empty());
     let module = q.module.clone();
     // Несколько тегов — «и»: спрашивают обычно «что и то, и другое», а не
     // «хоть что-нибудь из».
@@ -379,6 +386,63 @@ pub(crate) async fn tickets(
         }
     };
 
+    // Опечатка обязана отличаться от ответа.
+    //
+    // `-P ws-a` в воркспейсе, где проект называется иначе, отдавал ноль — ту
+    // же цифру, что и честное «таких тикетов нет». Одно это ответ, другое
+    // промах, и их сделали неразличимыми молча. В JS-инструменте проверка была
+    // (94ff114), при переписывании на Rust потерялась вместе с запятыми.
+    if let Some(names) = &statuses {
+        let known: Vec<String> = match tx.query("select name from statuses", &[]).await {
+            Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        };
+        let unknown = write::absent_from(names, &known);
+        if !unknown.is_empty() {
+            let mut all = known.clone();
+            all.sort();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "неизвестный статус: {}. Есть: {}",
+                        unknown.join(", "),
+                        all.join(", ")
+                    ),
+                    "unknown_statuses": unknown,
+                    "statuses": all
+                })),
+            )
+                .into_response();
+        }
+    }
+    if let Some(pr) = &project {
+        let known: Vec<String> = match tx.query("select id from projects", &[]).await {
+            Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        };
+        let asked = vec![pr.clone()];
+        if !write::absent_from(&asked, &known).is_empty() {
+            // Близкие имена важнее полного списка: их обычно и имели в виду, а
+            // список проектов бывает в сотню строк.
+            let near = write::near_misses(pr, &known);
+            let hint = if near.is_empty() {
+                String::from("Список: ntk meta")
+            } else {
+                format!("Близкие: {}", near.join(", "))
+            };
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("неизвестный проект \"{pr}\". {hint}"),
+                    "unknown_project": pr,
+                    "near": near
+                })),
+            )
+                .into_response();
+        }
+    }
+
     // Условия собираются, а не прячутся за «или».
     //
     // Раньше здесь было `where ($1::text is null or status = $1)` — коротко и
@@ -396,9 +460,12 @@ pub(crate) async fn tickets(
     };
     let mut sql = format!("{head} from tickets where deleted_at is null");
     let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-    if status.is_some() {
-        args.push(&status);
-        sql.push_str(&format!(" and status = ${}", args.len()));
+    // `= any(...)` вместо цепочки `or`: одно условие, индекс по статусу
+    // остаётся применимым — ровно та причина, по которой выше отказались от
+    // «или» в пользу собранных условий.
+    if statuses.is_some() {
+        args.push(&statuses);
+        sql.push_str(&format!(" and status = any(${})", args.len()));
     }
     if mine.is_some() {
         args.push(&mine);
