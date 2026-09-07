@@ -15,15 +15,13 @@ pub struct Config {
     /// в ключе, поэтому одного достаточно на все свои воркспейсы.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// Всё остальное, что лежит в файле, сохраняется как есть.
-    ///
-    /// Это не запас на будущее. Тот же файл сейчас принадлежит работающему
-    /// JS-клиенту и держит `workspaces` с токенами Notion; без этого поля
-    /// первый же `ntk login` переписал бы файл двумя строчками и оставил флот
-    /// без доступа. Уйдёт вместе с Notion, не раньше.
-    #[serde(flatten)]
-    pub rest: serde_json::Map<String, serde_json::Value>,
 }
+
+// Поле `rest` здесь было ради JS-клиента: тот же файл держал `workspaces` с
+// токенами Notion, и без сохранения чужих ключей первый же `ntk login` оставил
+// бы флот без доступа. JS-клиента больше нет, Notion тоже. Побочно это и
+// уборка: при следующей записи конфига протухшие токены Notion уходят с диска,
+// а не лежат там годами.
 
 fn default_url() -> String {
     "https://ntk.example.com".into()
@@ -37,7 +35,7 @@ pub fn path() -> Result<PathBuf> {
 pub fn load() -> Result<Config> {
     let p = path()?;
     if !p.exists() {
-        return Ok(Config { url: default_url(), key: None, rest: Default::default() });
+        return Ok(Config { url: default_url(), key: None });
     }
     let raw = std::fs::read_to_string(&p).with_context(|| format!("не читается {}", p.display()))?;
     Ok(serde_json::from_str(&raw).with_context(|| format!("{} не разбирается", p.display()))?)

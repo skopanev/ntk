@@ -1167,32 +1167,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ntk-export"
-version = "0.5.22"
-dependencies = [
- "anyhow",
- "clap",
- "ntk-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "ntk-import"
-version = "0.5.22"
-dependencies = [
- "anyhow",
- "ntk-core",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tokio-postgres",
-]
-
-[[package]]
 name = "ntk-migrate"
 version = "0.5.22"
 dependencies = [

@@ -174,7 +174,7 @@ implementation that drifts.
 
 ## Repository
 
-Six crates, because they have different fates: the core is shared, the CLI is
+Four crates, because they have different fates: the core is shared, the CLI is
 installed on people's machines, the service lives on the droplet, and the
 migration runner must never end up inside a client binary.
 
@@ -182,7 +182,6 @@ migration runner must never end up inside a client binary.
 - `crates/ntk-cli` — the client
 - `crates/ntk-api` — the service
 - `crates/ntk-migrate` — migration runner, deployment only
-- `crates/ntk-export`, `crates/ntk-import` — moving data in and out
 - `sql/` — per-workspace schema and migrations
 - `server/` — provisioning, Postgres and Caddy config, systemd units, backups
 - `dist/` — MCP bundle packaging
