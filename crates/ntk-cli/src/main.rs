@@ -236,6 +236,28 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Жизненный цикл проекта: убрать опустевшее имя из выбора и перенести
+    /// тикеты целиком.
+    ///
+    /// Переименования нет намеренно: id проекта сидит префиксом в
+    /// идентификаторах тикетов, а те — первичные ключи. «Переименовать» здесь
+    /// значит перенести тикеты и убрать опустевшее имя, двумя шагами.
+    Projects {
+        /// Убрать опустевший проект из выбора. Непустой не убирается.
+        #[arg(long)]
+        archive: Option<String>,
+        /// Вернуть проект в выбор.
+        #[arg(long)]
+        unarchive: Option<String>,
+        /// Перенести ВСЕ тикеты этого проекта. Требует --to.
+        #[arg(long = "move")]
+        move_from: Option<String>,
+        /// Куда переносить.
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Что есть в воркспейсе: статусы, приоритеты, проекты, люди.
     Meta {
         #[arg(long)]
@@ -276,6 +298,8 @@ async fn main() -> Result<()> {
             let f = api::Filters { status, tag, title, assignee, project, module, strict, all };
             walk(ws, f, reset, json).await
         }
+        Cmd::Projects { archive, unarchive, move_from, to, json } =>
+            projects(ws, archive, unarchive, move_from, to, json).await,
         Cmd::Show { id, json } => show(id, ws, json).await,
         Cmd::Next { prefer, json } => next(ws, prefer, json).await,
         Cmd::Create { title, project, priority, assignee, kind, status, tags, body, deps, module, json } =>
@@ -1064,4 +1088,77 @@ mod describe_tests {
         assert_ne!(a, none, "обход по модулю не равен обходу без модуля: {a}");
         assert!(a.contains("server/db"), "модуль не назван: {a}");
     }
+}
+
+/// Жизненный цикл проекта.
+///
+/// Ровно одно действие за вызов: перенос и архивирование по отдельности
+/// обратимы по-разному, и склеивать их в один шаг значит лишить человека
+/// возможности остановиться между ними и посмотреть, что получилось.
+async fn projects(
+    workspace: Option<String>,
+    archive: Option<String>,
+    unarchive: Option<String>,
+    move_from: Option<String>,
+    to: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let cfg = config::load()?;
+    let key = config::require_key(&cfg)?;
+    let ws = workspace
+        .or_else(config::workspace_from_rc)
+        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+    let c = api::Client::new(&cfg.url);
+
+    let asked = [archive.is_some(), unarchive.is_some(), move_from.is_some()]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if asked > 1 {
+        anyhow::bail!("за один раз — одно действие: --archive, --unarchive или --move");
+    }
+
+    if let Some(from) = move_from {
+        let to = to.context("--move требует --to: назовите целевой проект")?;
+        let v = c.move_project(&key, &ws, &from, &to).await?;
+        if json {
+            println!("{v}");
+        } else {
+            let n = v.get("moved").and_then(|x| x.as_i64()).unwrap_or(0);
+            println!("перенесено тикетов: {n} — {from} → {to}");
+            // Сказать это обязательно: иначе несовпадение префикса выглядит
+            // поломкой, и кто-нибудь пойдёт «чинить» идентификаторы.
+            println!("идентификаторы не менялись: тикеты остаются с прежним префиксом {from}-");
+            println!("убрать опустевшее имя из выбора: ntk projects --archive {from} -W {ws}");
+        }
+        return Ok(());
+    }
+
+    if let Some(id) = archive.or(unarchive.clone()) {
+        let want_archived = unarchive.is_none();
+        let v = c.set_project_archived(&key, &ws, &id, want_archived).await?;
+        if json {
+            println!("{v}");
+        } else if want_archived {
+            println!("{id} убран из выбора; заведённые тикеты остались на месте");
+        } else {
+            println!("{id} снова доступен для выбора");
+        }
+        return Ok(());
+    }
+
+    let m = c.meta(&key, &ws).await?;
+    if json {
+        println!("{}", m.get("projects").cloned().unwrap_or(serde_json::Value::Null));
+        return Ok(());
+    }
+    match m.get("projects").and_then(|p| p.as_array()) {
+        Some(ps) if !ps.is_empty() => {
+            for p in ps {
+                println!("{}", p.as_str().unwrap_or_default());
+            }
+        }
+        _ => println!("проектов нет"),
+    }
+    Ok(())
 }

@@ -1017,3 +1017,252 @@ pub async fn set_modules(
     }))
     .into_response()
 }
+
+// ── Жизненный цикл проекта ───────────────────────────────────────────────────
+//
+// Проекты до сих пор только заводились: строка появлялась сама при первом
+// тикете и не исчезала никогда. Переименования нет и не будет — id проекта
+// сидит префиксом в идентификаторах тикетов, а те первичные ключи. Поэтому
+// «переименовать» здесь значит перенести тикеты и убрать опустевшее имя из
+// выбора, и обе половины должны существовать: без второй в `ntk meta` навсегда
+// остаётся алиас, в который можно записать по недосмотру.
+
+/// Модули, которых нет в целевом проекте.
+///
+/// Внешний ключ тикета идёт на ПАРУ (project_id, module), поэтому перенос
+/// тикета с модулем туда, где такого имени не заведено, отвергнет база — и
+/// человек увидит «внутреннюю ошибку» вместо списка того, что надо создать.
+/// Считаем заранее и называем поимённо.
+///
+/// Архивные не отсеиваем намеренно: архив запрещает ВЫБИРАТЬ модуль для новой
+/// работы, а здесь ссылка уже существует и обязана остаться рабочей — ровно то
+/// разделение, ради которого заводился archived_at (sql/017).
+pub(crate) fn modules_missing_in_target(source: &[String], target: &[String]) -> Vec<String> {
+    let have: std::collections::BTreeSet<&str> = target.iter().map(String::as_str).collect();
+    let mut miss: Vec<String> = source
+        .iter()
+        .filter(|m| !have.contains(m.as_str()))
+        .cloned()
+        .collect();
+    miss.sort();
+    miss.dedup();
+    miss
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectPatch {
+    workspace: Option<String>,
+    /// Убрать из выбора или вернуть в него.
+    archived: bool,
+}
+
+/// Убрать опустевший проект из выбора, не стирая его.
+///
+/// Стереть нельзя: на id проекта ссылаются идентификаторы уже заведённых
+/// тикетов, и удаление строки сделало бы их сиротами. Архив отвечает на другой
+/// вопрос — «можно ли выбрать его для новой работы», — и отвечает «нет».
+///
+/// Архивировать непустой проект отказываемся: тикеты никуда не денутся, но
+/// пропадут из `meta`, и работа станет невидимой, оставшись живой.
+pub async fn patch_project(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Path(project): Path<String>,
+    Json(p): Json<ProjectPatch>,
+) -> Response {
+    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tx = match db::begin(&mut client, &ws).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+    };
+
+    if tx
+        .query_opt("select 1 from projects where id = $1", &[&project])
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+    }
+
+    if p.archived {
+        let left: i64 = match tx
+            .query_one("select count(*) from tickets where project_id = $1", &[&project])
+            .await
+        {
+            Ok(r) => r.get(0),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        };
+        if left > 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "в проекте {project} ещё {left} тикетов: перенесите их, иначе работа станет невидимой, оставшись живой"
+                    ),
+                    "tickets": left
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    if tx
+        .execute("update projects set archived = $2 where id = $1", &[&project, &p.archived])
+        .await
+        .is_err()
+    {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+    }
+    if tx.commit().await.is_err() {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+    }
+    Json(json!({ "project": project, "archived": p.archived })).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectMove {
+    workspace: Option<String>,
+    /// Куда переносим. Заводится, если ещё нет, — как и при заведении тикета.
+    to: String,
+}
+
+/// Перенести ВСЕ тикеты проекта в другой проект, одной транзакцией.
+///
+/// Поштучный `PATCH` тоже умеет менять проект, но на двух тысячах тикетов это
+/// две тысячи запросов, каждый со своим окном на отказ посередине. Здесь либо
+/// переезжают все, либо никто.
+///
+/// Идентификаторы тикетов НЕ меняются: они первичные ключи, на них ссылаются
+/// зависимости и вся переписка снаружи. Поэтому после переноса префикс id
+/// перестаёт совпадать с именем проекта — это цена сохранности ссылок, и она
+/// выбрана осознанно.
+pub async fn move_project(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Path(from): Path<String>,
+    Json(p): Json<ProjectMove>,
+) -> Response {
+    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let to = p.to.trim().to_string();
+    if to.is_empty() {
+        return oops(StatusCode::BAD_REQUEST, "назовите целевой проект");
+    }
+    if to == from {
+        return oops(StatusCode::BAD_REQUEST, "перенос в тот же проект ничего не значит");
+    }
+    let tx = match db::begin(&mut client, &ws).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+    };
+
+    if tx
+        .query_opt("select 1 from projects where id = $1", &[&from])
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+    }
+    if tx
+        .execute(
+            "insert into projects (id, name) values ($1, $1) on conflict (id) do nothing",
+            &[&to],
+        )
+        .await
+        .is_err()
+    {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+    }
+
+    // Модули считаем ДО записи: иначе внешний ключ на пару отвергнет перенос
+    // где-то посередине, и вместо списка недостающих имён человек получит
+    // «внутреннюю ошибку».
+    let source: Vec<String> = match tx
+        .query(
+            "select distinct module from tickets where project_id = $1 and module is not null",
+            &[&from],
+        )
+        .await
+    {
+        Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+    };
+    let target: Vec<String> = match tx
+        .query("select name from modules where project_id = $1", &[&to])
+        .await
+    {
+        Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+    };
+    let missing = modules_missing_in_target(&source, &target);
+    if !missing.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "в проекте {to} не заведены модули, на которые ссылаются переносимые тикеты: {}",
+                    missing.join(", ")
+                ),
+                "missing_modules": missing
+            })),
+        )
+            .into_response();
+    }
+
+    let moved = match tx
+        .execute("update tickets set project_id = $2 where project_id = $1", &[&from, &to])
+        .await
+    {
+        Ok(n) => n,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+    };
+    if tx.commit().await.is_err() {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+    }
+    Json(json!({ "from": from, "to": to, "moved": moved })).into_response()
+}
+
+#[cfg(test)]
+mod project_lifecycle_tests {
+    use super::modules_missing_in_target;
+
+    #[test]
+    fn names_every_module_the_target_lacks() {
+        let miss = modules_missing_in_target(
+            &["db".into(), "api".into(), "web".into()],
+            &["api".into()],
+        );
+        assert_eq!(miss, vec!["db".to_string(), "web".to_string()]);
+    }
+
+    #[test]
+    fn nothing_missing_means_the_move_is_allowed() {
+        let miss =
+            modules_missing_in_target(&["db".into()], &["db".into(), "api".into()]);
+        assert!(miss.is_empty(), "лишний отказ: {miss:?}");
+    }
+
+    // Имя модуля уникально лишь ВНУТРИ проекта, поэтому совпадение проверяется
+    // по имени в целевом реестре, а не по факту существования где-нибудь.
+    #[test]
+    fn tickets_without_modules_never_block_the_move() {
+        assert!(modules_missing_in_target(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn one_missing_module_is_reported_once() {
+        let miss = modules_missing_in_target(&["db".into(), "db".into()], &[]);
+        assert_eq!(miss, vec!["db".to_string()], "дубли в отказе только мешают читать");
+    }
+}

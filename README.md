@@ -85,6 +85,7 @@ project   = ntk
 | `ntk deps <id>` | What it waits on, and what waits on it |
 | `ntk modules` | Modules of a project, current and archived |
 | `ntk meta` | What the workspace has: statuses, priorities, projects, people |
+| `ntk projects` | Project lifecycle: retire an emptied name, move tickets wholesale |
 | `ntk upgrade` | Update to the latest published version |
 | `ntk mcp` | Serve the same commands over MCP, on stdio |
 
@@ -124,6 +125,30 @@ anything in `in_progress` or `complete`. That is somebody else's work in flight,
 so it takes a deliberate flag rather than a convenient default.
 
 Priorities are `high`, `med`, `low`.
+
+## Projects
+
+There is no rename. A project id sits as the prefix of every ticket id, and
+those are primary keys — renaming would rewrite the key of every ticket that
+already exists, and every reference to it from outside. So "rename" here is two
+deliberate steps:
+
+```bash
+ntk projects --move old --to new -W ws   # every ticket, one transaction
+ntk projects --archive old -W ws         # the emptied name leaves the choice
+```
+
+The move keeps ticket ids and dependencies exactly as they were. The price is
+that moved tickets keep the old prefix: `old-1a2b3c` now lives in project `new`.
+That is deliberate — a stable reference is worth more than a tidy prefix.
+
+A module is registered per project, and a ticket's module is a foreign key on
+the pair. The move therefore refuses up front, naming every module the target
+lacks, instead of failing halfway through on a constraint.
+
+Archiving refuses while the project still holds tickets: they would not be
+deleted, but they would vanish from `meta` — work that is invisible and still
+alive. Move first, then retire.
 
 ## Tickets
 

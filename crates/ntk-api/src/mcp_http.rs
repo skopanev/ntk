@@ -19,7 +19,6 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use rand::Rng;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
@@ -207,13 +206,6 @@ fn hdrs(token: &str) -> HeaderMap {
         h.insert(axum::http::header::AUTHORIZATION, v);
     }
     h
-}
-
-/// Хвост идентификатора: десять символов base36, как и в клиенте.
-fn tail() -> String {
-    const A: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut r = rand::thread_rng();
-    (0..10).map(|_| A[r.gen_range(0..A.len())] as char).collect()
 }
 
 async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bool, String) {

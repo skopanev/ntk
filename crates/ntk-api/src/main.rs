@@ -77,6 +77,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/tickets/{id}/deps", get(write::deps))
         .route("/v1/meta", get(write::meta))
         .route("/v1/projects/{id}/modules", axum::routing::put(write::set_modules))
+        // Жизненный цикл проекта: убрать опустевшее имя из выбора и
+        // перенести тикеты целиком. Переименования нет намеренно —
+        // id проекта сидит префиксом в первичных ключах тикетов.
+        .route("/v1/projects/{id}", patch(write::patch_project))
+        .route("/v1/projects/{id}/move", post(write::move_project))
         // Вход без передачи ключа из рук в руки: устройство берёт код,
         // человек проходит Google, устройство забирает ключ.
         // Захват тикета — то, ради чего переезжали: в Notion между чтением

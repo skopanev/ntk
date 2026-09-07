@@ -440,6 +440,46 @@ impl Client {
 
 
     /// Замена списка модулей проекта целиком.
+    /// Убрать проект из выбора или вернуть в него.
+    pub async fn set_project_archived(
+        &self, key: &str, workspace: &str, project: &str, archived: bool,
+    ) -> Result<serde_json::Value> {
+        let r = self
+            .http
+            .patch(format!("{}/v1/projects/{}", self.base, urlencode(project)))
+            .bearer_auth(key)
+            .json(&serde_json::json!({ "workspace": workspace, "archived": archived }))
+            .send()
+            .await
+            .context("сервис недоступен")?;
+        let code = r.status();
+        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        if !code.is_success() {
+            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
+        }
+        Ok(v)
+    }
+
+    /// Перенести все тикеты проекта в другой — одной транзакцией на сервисе.
+    pub async fn move_project(
+        &self, key: &str, workspace: &str, from: &str, to: &str,
+    ) -> Result<serde_json::Value> {
+        let r = self
+            .http
+            .post(format!("{}/v1/projects/{}/move", self.base, urlencode(from)))
+            .bearer_auth(key)
+            .json(&serde_json::json!({ "workspace": workspace, "to": to }))
+            .send()
+            .await
+            .context("сервис недоступен")?;
+        let code = r.status();
+        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        if !code.is_success() {
+            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
+        }
+        Ok(v)
+    }
+
     pub async fn replace_modules(
         &self, key: &str, workspace: &str, project: &str, modules: &[String],
     ) -> Result<serde_json::Value> {
