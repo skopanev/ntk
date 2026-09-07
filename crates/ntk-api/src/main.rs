@@ -371,12 +371,69 @@ pub(crate) async fn tickets(
     // иначе «мои тикеты» стали бы просьбой, которую можно не выполнять.
     // Явно названный исполнитель важнее умолчания «мои»: спросили про чужую
     // очередь — отвечаем про чужую.
-    let mine: Option<String> = match (&q.assignee, q.all) {
-        (Some(a), _) => Some(a.clone()),
+    // Исполнителей тоже несколько: «чьи это — мои или Пети» такой же обычный
+    // вопрос, как и про статусы, и в JS-инструменте запятая работала для обоих
+    // (684b8fb). При переписывании потерялись оба; статус вернули раньше, этот
+    // — здесь.
+    let mine: Option<Vec<String>> = match (&q.assignee, q.all) {
+        (Some(a), _) => {
+            let v: Vec<String> = a
+                .split(',')
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .map(String::from)
+                .collect();
+            (!v.is_empty()).then_some(v)
+        }
         (None, true) => None,
-        (None, false) => Some(actor.user_id.clone()),
+        (None, false) => Some(vec![actor.user_id.clone()]),
     };
     let project = q.project.clone();
+
+    // Список людей читается ДО транзакции — и это не стиль, а необходимость.
+    //
+    // db::begin делает `SET LOCAL ROLE ntk_ws_<воркспейс>`, а ntk_api объявлен
+    // NOINHERIT: внутри транзакции прав на схему core уже нет, и запрос к
+    // core.users отвечает «permission denied». Изоляция работает как задумано —
+    // общее читается до входа в роль воркспейса.
+    //
+    // Проверяем по core.users, а НЕ по составу воркспейса: человека могли
+    // вывести, а его тикеты остались, и настоящий хэндл не должен превращаться
+    // в ошибку. Опечатка — должна.
+    let known_people: Vec<String> = if q.assignee.is_some() {
+        match client.query("select id from core.users", &[]).await {
+            Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+            Err(e) => {
+                tracing::error!(error = %e, "не удалось прочитать core.users");
+                return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if let Some(names) = q.assignee.as_ref().and(mine.as_ref()) {
+        let unknown = write::absent_from(names, &known_people);
+        if !unknown.is_empty() {
+            let near: Vec<String> = unknown
+                .iter()
+                .flat_map(|u| write::near_misses(u, &known_people))
+                .collect();
+            let hint = if near.is_empty() {
+                String::from("Список: ntk meta")
+            } else {
+                format!("Близкие: {}", near.join(", "))
+            };
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("неизвестный исполнитель: {}. {hint}", unknown.join(", ")),
+                    "unknown_assignees": unknown,
+                    "near": near
+                })),
+            )
+                .into_response();
+        }
+    }
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
@@ -469,7 +526,7 @@ pub(crate) async fn tickets(
     }
     if mine.is_some() {
         args.push(&mine);
-        sql.push_str(&format!(" and assignee = ${}", args.len()));
+        sql.push_str(&format!(" and assignee = any(${})", args.len()));
     }
     if module.is_some() {
         args.push(&module);

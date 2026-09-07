@@ -1054,8 +1054,13 @@ pub(crate) fn near_misses(asked: &str, known: &[String]) -> Vec<String> {
             if k.contains(asked) || asked.contains(k.as_str()) {
                 return Some((0, k.clone()));
             }
+            // Порог зависит от длины: для `skk` расстояние 2 накрывает
+            // половину коротких хэндлов (kf, kh, s4, sh), и подсказка из шума
+            // хуже, чем её отсутствие. Одна правка на короткое имя, две — на
+            // длинное, где опечатка чаще двойная.
             let d = edit_distance(asked, k);
-            (d <= 2).then_some((d, k.clone()))
+            let limit = if asked.chars().count() <= 4 { 1 } else { 2 };
+            (d <= limit).then_some((d, k.clone()))
         })
         .collect();
     near.sort();
@@ -1313,6 +1318,16 @@ mod project_lifecycle_tests {
     fn a_one_letter_typo_finds_its_target() {
         let near = super::near_misses("fbak", &["proj-b".into(), "proj-a".into(), "ntk".into()]);
         assert!(near.contains(&"proj-b".to_string()), "не предложен proj-b: {near:?}");
+    }
+
+    // Короткие хэндлы: две правки превращают в «похожее» почти всё.
+    #[test]
+    fn short_handles_suggest_only_one_edit_away() {
+        let near = super::near_misses(
+            "skk",
+            &["sk".into(), "kf".into(), "kh".into(), "s4".into(), "sh".into()],
+        );
+        assert_eq!(near, vec!["sk".to_string()], "подсказка из шума: {near:?}");
     }
 
     #[test]
