@@ -229,6 +229,11 @@ enum Cmd {
         /// ввода: по одному имени в строке. Список считается ПОЛНЫМ.
         #[arg(long)]
         replace: bool,
+        /// Завести названные модули, НЕ трогая остальной реестр. Ничего не
+        /// уходит из действующих — в отличие от --replace, которому нужен
+        /// полный список и который убирает всё, чего в нём нет.
+        #[arg(long, conflicts_with = "replace")]
+        add: bool,
         /// Читать список со стандартного ввода. Пишется явно, чтобы замена
         /// набора никогда не случалась по недосмотру.
         #[arg(long)]
@@ -310,7 +315,8 @@ async fn main() -> Result<()> {
         Cmd::Start { id } => start(id, ws).await,
         Cmd::Deps { id, up, down, json } => deps(id, ws, up, down, json).await,
         Cmd::Rm { id, yes } => rm(id, ws, yes).await,
-        Cmd::Modules { project, replace, stdin, json } => modules(ws, project, replace, stdin, json).await,
+        Cmd::Modules { project, replace, add, stdin, json } =>
+            modules(ws, project, replace, add, stdin, json).await,
         Cmd::Meta { json } => meta(ws, json).await,
         Cmd::Whoami => whoami().await,
         Cmd::Mcp => serve_mcp().await,
@@ -978,6 +984,7 @@ async fn modules(
     workspace: Option<String>,
     project: Option<String>,
     replace: bool,
+    add: bool,
     stdin: bool,
     json: bool,
 ) -> Result<()> {
@@ -987,6 +994,47 @@ async fn modules(
         .or_else(config::workspace_from_rc)
         .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
     let client = api::Client::new(&cfg.url);
+
+    if add {
+        let project = project.clone().context("добавление требует проекта: -P")?;
+        // Источник тот же, что у замены, но требование --stdin здесь мягче:
+        // добавление ничего не убирает, поэтому забытый флаг не может стоить
+        // реестра. Имена можно передать и через запятую.
+        let list: Vec<String> = if stdin {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .context("не удалось прочитать список со стандартного ввода")?;
+            text.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(String::from)
+                .collect()
+        } else {
+            anyhow::bail!("назовите модули: --add --stdin (по имени в строке)");
+        };
+        if list.is_empty() {
+            anyhow::bail!("список пуст: нечего добавлять");
+        }
+        let r = client.add_modules(key, &ws, &project, &list).await?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&r)?);
+            return Ok(());
+        }
+        let names = |k: &str| -> Vec<String> {
+            r.get(k).and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default()
+        };
+        for (label, key) in [("заведено", "added"), ("возвращено из архива", "restored")] {
+            let v = names(key);
+            if !v.is_empty() { println!("  {label}: {}", v.join(", ")); }
+        }
+        // Сказать это вслух важнее, чем кажется: операцию берут именно потому,
+        // что она ничего не убирает, и проверяющий должен видеть подтверждение,
+        // а не выводить его из тишины.
+        println!("  ничего не убрано из действующих");
+        return Ok(());
+    }
 
     if replace {
         let project = project.context("замена списка требует проекта: -P")?;

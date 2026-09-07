@@ -1360,3 +1360,123 @@ mod project_lifecycle_tests {
         assert_eq!(miss, vec!["db".to_string()], "дубли в отказе только мешают читать");
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModulesAdd {
+    workspace: Option<String>,
+    /// Имена, которые надо завести. Список ДОПОЛНЯЕТ реестр и ничего из него
+    /// не убирает.
+    add: Vec<String>,
+}
+
+/// Завести модули, не трогая остальной реестр.
+///
+/// Замена набора существовала с самого начала, добавления не было — и это
+/// заставляло присылать ПОЛНЫЙ список ради трёх новых имён. Список из восьмидесяти
+/// строк, отправленный ради трёх, — это семьдесят семь возможностей молча
+/// потерять строку: любая забытая уходит из действующих. Ревью, отвергающее
+/// такую операцию, право, и обходить его через «пришлите весь список
+/// аккуратно» неправильно: аккуратность не свойство операции.
+///
+/// Имя, которое уже есть и действует, — не ошибка, а ничего: повторный вызов
+/// с тем же списком обязан быть безопасным.
+///
+/// Архивное имя возвращается в действующие. Просьба завести модуль означает,
+/// что работа по нему снова идёт; отказать здесь значило бы требовать полной
+/// замены ровно в том случае, ради которого добавление и заводилось.
+pub async fn add_modules(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Path(project): Path<String>,
+    Json(p): Json<ModulesAdd>,
+) -> Response {
+    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let wanted: Vec<String> = {
+        let mut seen = std::collections::BTreeSet::new();
+        p.add
+            .iter()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty() && seen.insert(m.clone()))
+            .collect()
+    };
+    if wanted.is_empty() {
+        return oops(StatusCode::BAD_REQUEST, "назовите хотя бы один модуль");
+    }
+
+    let tx = match db::begin(&mut client, &ws).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+    };
+    if tx
+        .query_opt("select 1 from projects where id = $1", &[&project])
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+    }
+
+    let mut added: Vec<String> = Vec::new();
+    let mut restored: Vec<String> = Vec::new();
+    for m in &wanted {
+        let was: Option<Option<std::time::SystemTime>> = match tx
+            .query_opt(
+                "select archived_at from modules where project_id = $1 and name = $2",
+                &[&project, m],
+            )
+            .await
+        {
+            Ok(r) => r.map(|row| row.get(0)),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        };
+        match was {
+            // Действует — делать нечего.
+            Some(None) => {}
+            Some(Some(_)) => {
+                if tx
+                    .execute(
+                        "update modules set archived_at = null
+                          where project_id = $1 and name = $2",
+                        &[&project, m],
+                    )
+                    .await
+                    .is_err()
+                {
+                    return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                }
+                restored.push(m.clone());
+            }
+            None => {
+                if tx
+                    .execute(
+                        "insert into modules (project_id, name) values ($1, $2)",
+                        &[&project, m],
+                    )
+                    .await
+                    .is_err()
+                {
+                    return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                }
+                added.push(m.clone());
+            }
+        }
+    }
+    if tx.commit().await.is_err() {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+    }
+    // Ничего не удалено и не заархивировано — это свойство операции, и оно
+    // названо в ответе, чтобы проверяющему не приходилось верить на слово.
+    Json(json!({
+        "project": project,
+        "added": added,
+        "restored": restored,
+        "archived": Vec::<String>::new(),
+        "deleted": Vec::<String>::new()
+    }))
+    .into_response()
+}

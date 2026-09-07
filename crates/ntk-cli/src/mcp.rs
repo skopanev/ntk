@@ -84,6 +84,15 @@ pub struct ModulesReplaceArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModulesAddArgs {
+    pub workspace: String,
+    pub project: String,
+    /// Имена, которые надо завести. Реестр ДОПОЛНЯЕТСЯ: ничего не уходит из
+    /// действующих, в отличие от замены.
+    pub add: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct CloseArgs {
     pub id: String,
     pub workspace: String,
@@ -432,6 +441,16 @@ impl Ntk {
             })
             .collect();
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&rows).map_err(oops)?)]))
+    }
+
+    #[tool(description = "Завести модули проекта, НЕ трогая остальной реестр: ничего не уходит из действующих. Берите это вместо замены, когда нужно просто добавить имена.")]
+    async fn ntk_modules_add(&self, Parameters(a): Parameters<ModulesAddArgs>) -> Result<CallToolResult, McpError> {
+        if a.add.is_empty() {
+            return Err(oops("назовите хотя бы один модуль"));
+        }
+        let (c, key) = Self::client().await?;
+        let v = c.add_modules(&key, &a.workspace, &a.project, &a.add).await.map_err(oops)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&v).map_err(oops)?)]))
     }
 
     #[tool(description = "Заменить список модулей проекта целиком. Список считается \

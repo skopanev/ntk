@@ -480,6 +480,26 @@ impl Client {
         Ok(v)
     }
 
+    /// Завести модули, не трогая остальной реестр.
+    pub async fn add_modules(
+        &self, key: &str, workspace: &str, project: &str, add: &[String],
+    ) -> Result<serde_json::Value> {
+        let r = self
+            .http
+            .post(format!("{}/v1/projects/{}/modules", self.base, urlencode(project)))
+            .bearer_auth(key)
+            .json(&serde_json::json!({ "workspace": workspace, "add": add }))
+            .send()
+            .await
+            .context("сервис недоступен")?;
+        let code = r.status();
+        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        if !code.is_success() {
+            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
+        }
+        Ok(v)
+    }
+
     pub async fn replace_modules(
         &self, key: &str, workspace: &str, project: &str, modules: &[String],
     ) -> Result<serde_json::Value> {

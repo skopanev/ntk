@@ -76,7 +76,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/tickets/{id}", get(ticket_one).delete(write::remove))
         .route("/v1/tickets/{id}/deps", get(write::deps))
         .route("/v1/meta", get(write::meta))
-        .route("/v1/projects/{id}/modules", axum::routing::put(write::set_modules))
+        // PUT заменяет набор целиком, POST только добавляет. Разные глаголы
+        // не для красоты: замена может убрать из действующих то, чего в
+        // присланном списке не оказалось, добавление — не может никогда.
+        .route(
+            "/v1/projects/{id}/modules",
+            axum::routing::put(write::set_modules).post(write::add_modules),
+        )
         // Жизненный цикл проекта: убрать опустевшее имя из выбора и
         // перенести тикеты целиком. Переименования нет намеренно —
         // id проекта сидит префиксом в первичных ключах тикетов.
