@@ -445,6 +445,10 @@ fn describe(f: &api::Filters) -> String {
     if let Some(v) = &f.status { p.push(format!("статус {v}")); }
     if let Some(v) = &f.assignee { p.push(format!("исполнитель {v}")); }
     if let Some(v) = &f.project { p.push(format!("проект {v}")); }
+    // Модуль обязан быть здесь, а не только в запросе: этой строкой различаются
+    // СЕАНСЫ обхода (walk_id). Без него обходы с разным --module делят один
+    // курсор, и второй продолжает с того места, где кончился первый.
+    if let Some(v) = &f.module { p.push(format!("модуль {v}")); }
     if let Some(v) = &f.tag { p.push(format!("тег {v}{}", if f.strict { " целиком" } else { "" })); }
     if let Some(v) = &f.title { p.push(format!("заголовок «{v}»")); }
     if f.all { p.push("все, не только свои".into()); }
@@ -1028,4 +1032,36 @@ async fn modules(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::{api::Filters, describe};
+
+    fn with_module(m: Option<&str>) -> Filters {
+        Filters {
+            status: Some("open".into()),
+            tag: None,
+            title: None,
+            assignee: None,
+            project: Some("ntk".into()),
+            module: m.map(str::to_string),
+            strict: false,
+            all: true,
+        }
+    }
+
+    // describe() — не украшение вывода: этой строкой различаются СЕАНСЫ обхода
+    // (walk_id хранится под ключом "воркспейс|описание"). Пока модуля в ней не
+    // было, два обхода с разным --module делили один курсор, и второй
+    // продолжал с того места, где кончился первый, — молча пропуская тикеты.
+    #[test]
+    fn module_makes_the_walk_session_distinct() {
+        let a = describe(&with_module(Some("server/db")));
+        let b = describe(&with_module(Some("server/api")));
+        let none = describe(&with_module(None));
+        assert_ne!(a, b, "обходы по разным модулям обязаны разойтись: {a}");
+        assert_ne!(a, none, "обход по модулю не равен обходу без модуля: {a}");
+        assert!(a.contains("server/db"), "модуль не назван: {a}");
+    }
 }

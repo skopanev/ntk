@@ -48,6 +48,25 @@ struct Poll {
     error: Option<String>,
 }
 
+/// Отборы в строку запроса — ОДНИМ местом на все ручки.
+///
+/// Раньше каждая ручка собирала их сама, и `walk` потерял `module`: clap его
+/// принимал, `Filters` нёс, до сервиса он не доезжал, а отбор выглядел
+/// применённым — обход отдавал весь набор. Пока перечень полей повторяется
+/// трижды, потеря поля в одном из них — вопрос времени, а не внимательности.
+fn filter_query(f: &Filters) -> Vec<(&'static str, String)> {
+    let mut q: Vec<(&'static str, String)> = Vec::new();
+    if let Some(v) = f.status.as_deref() { q.push(("status", v.to_string())); }
+    if let Some(v) = f.tag.as_deref() { q.push(("tag", v.to_string())); }
+    if let Some(v) = f.title.as_deref() { q.push(("title", v.to_string())); }
+    if let Some(v) = f.assignee.as_deref() { q.push(("assignee", v.to_string())); }
+    if let Some(v) = f.project.as_deref() { q.push(("project", v.to_string())); }
+    if let Some(v) = f.module.as_deref() { q.push(("module", v.to_string())); }
+    if f.strict { q.push(("strict", "true".to_string())); }
+    if f.all { q.push(("all", "true".to_string())); }
+    q
+}
+
 impl Client {
     pub fn new(base: &str) -> Self {
         Self {
@@ -135,8 +154,6 @@ impl Client {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ntk_core::Ticket>> {
-        let (status, tag, title, strict, all) =
-            (f.status.as_deref(), f.tag.as_deref(), f.title.as_deref(), f.strict, f.all);
         #[derive(Deserialize)]
         struct Wrap {
             #[serde(default)]
@@ -153,30 +170,7 @@ impl Client {
                 ("limit", &limit.to_string()),
                 ("offset", &offset.to_string()),
             ]);
-        if all {
-            req = req.query(&[("all", "true")]);
-        }
-        if let Some(s) = status {
-            req = req.query(&[("status", s)]);
-        }
-        if let Some(t) = tag {
-            req = req.query(&[("tag", t)]);
-        }
-        if let Some(t) = title {
-            req = req.query(&[("title", t)]);
-        }
-        if strict {
-            req = req.query(&[("strict", "true")]);
-        }
-        if let Some(a) = f.assignee.as_deref() {
-            req = req.query(&[("assignee", a)]);
-        }
-        if let Some(p) = f.project.as_deref() {
-            req = req.query(&[("project", p)]);
-        }
-        if let Some(m) = f.module.as_deref() {
-            req = req.query(&[("module", m)]);
-        }
+        req = req.query(&filter_query(f));
         let r = req.send().await.context("сервис недоступен")?;
         let code = r.status();
         let w: Wrap = r.json().await.context("ответ сервиса не разобрался")?;
@@ -286,8 +280,6 @@ impl Client {
     /// складывать — и медленно, и неверно, если между страницами что-то
     /// изменилось.
     pub async fn count(&self, key: &str, workspace: &str, f: &Filters) -> Result<i64> {
-        let (status, tag, title, strict, all) =
-            (f.status.as_deref(), f.tag.as_deref(), f.title.as_deref(), f.strict, f.all);
         #[derive(Deserialize)]
         struct Wrap {
             #[serde(default)]
@@ -300,30 +292,7 @@ impl Client {
             .get(format!("{}/v1/tickets", self.base))
             .bearer_auth(key)
             .query(&[("workspace", workspace), ("count", "true")]);
-        if all {
-            req = req.query(&[("all", "true")]);
-        }
-        if let Some(s) = status {
-            req = req.query(&[("status", s)]);
-        }
-        if let Some(t) = tag {
-            req = req.query(&[("tag", t)]);
-        }
-        if let Some(t) = title {
-            req = req.query(&[("title", t)]);
-        }
-        if strict {
-            req = req.query(&[("strict", "true")]);
-        }
-        if let Some(a) = f.assignee.as_deref() {
-            req = req.query(&[("assignee", a)]);
-        }
-        if let Some(p) = f.project.as_deref() {
-            req = req.query(&[("project", p)]);
-        }
-        if let Some(m) = f.module.as_deref() {
-            req = req.query(&[("module", m)]);
-        }
+        req = req.query(&filter_query(f));
         let r = req.send().await.context("сервис недоступен")?;
         let code = r.status();
         let w: Wrap = r.json().await.context("ответ сервиса не разобрался")?;
@@ -353,13 +322,7 @@ impl Client {
         if reset {
             req = req.query(&[("reset", "true")]);
         }
-        if let Some(v) = f.status.as_deref() { req = req.query(&[("status", v)]); }
-        if let Some(v) = f.tag.as_deref() { req = req.query(&[("tag", v)]); }
-        if let Some(v) = f.title.as_deref() { req = req.query(&[("title", v)]); }
-        if let Some(v) = f.assignee.as_deref() { req = req.query(&[("assignee", v)]); }
-        if let Some(v) = f.project.as_deref() { req = req.query(&[("project", v)]); }
-        if f.strict { req = req.query(&[("strict", "true")]); }
-        if f.all { req = req.query(&[("all", "true")]); }
+        req = req.query(&filter_query(f));
 
         let r = req.send().await.context("сервис недоступен")?;
         let code = r.status();
@@ -507,4 +470,49 @@ fn urlencode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+#[cfg(test)]
+mod filter_query_tests {
+    use super::{filter_query, Filters};
+
+    fn full() -> Filters {
+        Filters {
+            status: Some("open".into()),
+            tag: Some("infra".into()),
+            title: Some("заголовок".into()),
+            assignee: Some("sk".into()),
+            project: Some("ntk".into()),
+            module: Some("server/db".into()),
+            strict: true,
+            all: true,
+        }
+    }
+
+    // Отбор, названный в командной строке, обязан доехать до сервиса. Обход
+    // терял именно module: он принимался и молча не применялся, а выдача
+    // выглядела отфильтрованной. Проверяем ВСЕ поля разом — теперь строку
+    // запроса собирает одно место, поэтому один тест закрывает все ручки.
+    #[test]
+    fn every_filter_reaches_the_query() {
+        let q = filter_query(&full());
+        for want in ["status", "tag", "title", "assignee", "project", "module", "strict", "all"] {
+            assert!(q.iter().any(|(k, _)| *k == want), "потерян отбор {want}: {q:?}");
+        }
+    }
+
+    #[test]
+    fn module_carries_its_value() {
+        let q = filter_query(&full());
+        let m = q.iter().find(|(k, _)| *k == "module").expect("module");
+        assert_eq!(m.1, "server/db");
+    }
+
+    #[test]
+    fn empty_filters_add_nothing() {
+        let q = filter_query(&Filters {
+            status: None, tag: None, title: None, assignee: None,
+            project: None, module: None, strict: false, all: false,
+        });
+        assert!(q.is_empty(), "пустой отбор не должен ничего добавлять: {q:?}");
+    }
 }
