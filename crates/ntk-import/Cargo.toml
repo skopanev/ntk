@@ -1,0 +1,15 @@
+[package]
+name = "ntk-import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ntk-core = { path = "../ntk-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+tokio.workspace = true
+tokio-postgres.workspace = true

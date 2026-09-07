@@ -1,0 +1,11 @@
+[Unit]
+Description=Проверка свежести бэкапа
+
+[Timer]
+# Через три часа после ночного прогона: если он упал, к этому времени это уже
+# факт, а не гонка.
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

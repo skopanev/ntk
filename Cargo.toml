@@ -1,0 +1,44 @@
+# ntk 0.5.0 — Rust. Четыре крейта, потому что у них разная судьба: ядро общее,
+# CLI ставится людям, сервис живёт на дроплете, раннер миграций запускается
+# при развёртывании и в клиентский бинарь попадать не должен.
+[workspace]
+resolver = "3"
+members = [
+  "crates/ntk-core",
+  "crates/ntk-cli",
+  "crates/ntk-api",
+  "crates/ntk-migrate",
+  "crates/ntk-export",
+  "crates/ntk-import",
+]
+
+[workspace.package]
+version = "0.5.20"
+edition = "2024"
+rust-version = "1.88"
+repository = "git@github.com:skopanev/ntk.git"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7"
+axum = "0.8"
+deadpool-postgres = "0.14"
+hex = "0.4"
+sha2 = "0.10"
+hmac = "0.12"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+jsonwebtoken = "9"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+urlencoding = "2"
+rmcp = { version = "0.8", features = ["server", "transport-io"] }
+schemars = "1"

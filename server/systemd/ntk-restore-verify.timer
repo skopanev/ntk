@@ -1,0 +1,11 @@
+[Unit]
+Description=Еженедельная проверка восстановления из бэкапа ntk
+
+[Timer]
+# Понедельник, через час после ночного дампа: проверяется свежий, а не вчерашний.
+OnCalendar=Mon *-*-* 04:30:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

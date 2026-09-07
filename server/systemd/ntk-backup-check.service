@@ -1,0 +1,7 @@
+[Unit]
+Description=Свежесть бэкапа ntk
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ntk/backup.env
+ExecStart=/opt/ntk/server/backup/check-fresh.sh

@@ -1,0 +1,17 @@
+# TLS выпускается автоматически, если A-запись домена смотрит на дроплет.
+__DOMAIN__ {
+	encode zstd gzip
+
+	# Слот под ntk-api (юнит U7). Пока сервиса нет — отдаёт 502, это ожидаемо.
+	reverse_proxy localhost:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/ntk.log
+	}
+}

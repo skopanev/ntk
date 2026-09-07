@@ -1,0 +1,28 @@
+[package]
+name = "ntk-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ntk-core = { path = "../ntk-core" }
+anyhow.workspace = true
+axum.workspace = true
+deadpool-postgres.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+jiff.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+jsonwebtoken.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+urlencoding.workspace = true
+base64 = "0.22"
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"

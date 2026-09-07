@@ -1,0 +1,21 @@
+[package]
+name = "ntk-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ntk"
+path = "src/main.rs"
+
+[dependencies]
+ntk-core = { path = "../ntk-core" }
+anyhow.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+hex.workspace = true
+sha2.workspace = true
+rmcp.workspace = true
+schemars.workspace = true

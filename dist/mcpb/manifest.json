@@ -1,0 +1,28 @@
+{
+  "manifest_version": "0.2",
+  "name": "ntk",
+  "display_name": "NTK — тикеты",
+  "version": "0.5.0",
+  "description": "Тикеты команды: посмотреть свои, открыть, завести, взять в работу.",
+  "long_description": "Подключает Клода к очереди тикетов. Спросите «мои открытые задачи» или «покажи app-1a2b3c4d5e» обычными словами.\n\nПри первом обращении расширение покажет ссылку и короткий код: откройте ссылку, войдите рабочим аккаунтом Google — и всё. Ключ вводить не надо, он нигде не пересылается.",
+  "author": { "name": "hltm" },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/ntk",
+    "mcp_config": {
+      "command": "${__dirname}/server/ntk",
+      "args": ["mcp"]
+    }
+  },
+  "tools": [
+    { "name": "ntk_ls",     "description": "Список тикетов: по умолчанию свои" },
+    { "name": "ntk_show",   "description": "Тикет целиком: поля, тело, зависимости" },
+    { "name": "ntk_next",   "description": "Взять следующий свободный тикет" },
+    { "name": "ntk_create", "description": "Завести тикет" },
+    { "name": "ntk_update", "description": "Изменить тикет" }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin"]
+  }
+}

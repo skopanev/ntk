@@ -1,0 +1,416 @@
+{
+  "headings": {
+    "blocks": [
+      {
+        "type": "heading_1",
+        "heading_1": {
+          "rich_text": [
+            {
+              "plain_text": "Первый"
+            }
+          ]
+        }
+      },
+      {
+        "type": "heading_2",
+        "heading_2": {
+          "rich_text": [
+            {
+              "plain_text": "Второй"
+            }
+          ]
+        }
+      },
+      {
+        "type": "heading_4",
+        "heading_4": {
+          "rich_text": [
+            {
+              "plain_text": "Четвёртый"
+            }
+          ]
+        }
+      }
+    ],
+    "expected": "\n# Первый\n\n## Второй\n\n#### Четвёртый"
+  },
+  "lists": {
+    "blocks": [
+      {
+        "type": "numbered_list_item",
+        "numbered_list_item": {
+          "rich_text": [
+            {
+              "plain_text": "раз"
+            }
+          ]
+        }
+      },
+      {
+        "type": "numbered_list_item",
+        "numbered_list_item": {
+          "rich_text": [
+            {
+              "plain_text": "два"
+            }
+          ]
+        }
+      },
+      {
+        "type": "numbered_list_item",
+        "numbered_list_item": {
+          "rich_text": [
+            {
+              "plain_text": "пять"
+            }
+          ],
+          "list_start_index": 5
+        }
+      },
+      {
+        "type": "numbered_list_item",
+        "numbered_list_item": {
+          "rich_text": [
+            {
+              "plain_text": "буква"
+            }
+          ],
+          "list_format": "letters"
+        }
+      },
+      {
+        "type": "numbered_list_item",
+        "numbered_list_item": {
+          "rich_text": [
+            {
+              "plain_text": "римская"
+            }
+          ],
+          "list_format": "roman"
+        }
+      },
+      {
+        "type": "bulleted_list_item",
+        "bulleted_list_item": {
+          "rich_text": [
+            {
+              "plain_text": "точка"
+            }
+          ]
+        }
+      },
+      {
+        "type": "to_do",
+        "to_do": {
+          "rich_text": [
+            {
+              "plain_text": "сделано"
+            }
+          ],
+          "checked": true
+        }
+      },
+      {
+        "type": "to_do",
+        "to_do": {
+          "rich_text": [
+            {
+              "plain_text": "нет"
+            }
+          ],
+          "checked": false
+        }
+      }
+    ],
+    "expected": "1. раз\n2. два\n5. пять\nf. буква\nvii. римская\n- точка\n- [x] сделано\n- [ ] нет"
+  },
+  "quote_nested": {
+    "blocks": [
+      {
+        "type": "quote",
+        "quote": {
+          "rich_text": [
+            {
+              "plain_text": "цитата\n\nвторой абзац"
+            }
+          ]
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "paragraph": {
+              "rich_text": [
+                {
+                  "plain_text": "внутри"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "expected": "> цитата\n>\n> второй абзац\n> внутри"
+  },
+  "code": {
+    "blocks": [
+      {
+        "type": "code",
+        "code": {
+          "rich_text": [
+            {
+              "plain_text": "let x = 1;"
+            }
+          ],
+          "language": "javascript"
+        }
+      },
+      {
+        "type": "code",
+        "code": {
+          "rich_text": [
+            {
+              "plain_text": "текст с ``` забором внутри"
+            }
+          ],
+          "language": "plain text"
+        }
+      }
+    ],
+    "expected": "```javascript\nlet x = 1;\n```\n````\nтекст с ``` забором внутри\n````"
+  },
+  "media_and_links": {
+    "blocks": [
+      {
+        "type": "image",
+        "image": {
+          "caption": [
+            {
+              "plain_text": "схема"
+            }
+          ],
+          "file": {
+            "url": "https://x/y/pic.png?sig=1"
+          }
+        }
+      },
+      {
+        "type": "image",
+        "image": {
+          "file": {
+            "url": "https://x/y/bare.png?sig=1"
+          }
+        }
+      },
+      {
+        "type": "bookmark",
+        "bookmark": {
+          "url": "https://example.com/a",
+          "caption": [
+            {
+              "plain_text": "ссылка"
+            }
+          ]
+        }
+      },
+      {
+        "type": "embed",
+        "embed": {
+          "url": "https://youtube.com/watch?v=1"
+        }
+      },
+      {
+        "type": "link_to_page",
+        "link_to_page": {
+          "type": "page_id",
+          "page_id": "abc"
+        }
+      },
+      {
+        "type": "link_to_page",
+        "link_to_page": {
+          "type": "workspace",
+          "workspace": true
+        }
+      }
+    ],
+    "expected": "[image: схема — pic.png]\n[image: bare.png]\n[bookmark: ссылка — https://example.com/a]\n[embed: https://youtube.com/watch?v=1]\n[link to page: abc]\n[link to workspace]"
+  },
+  "structure": {
+    "blocks": [
+      {
+        "type": "table",
+        "table": {},
+        "children": [
+          {
+            "type": "table_row",
+            "table_row": {
+              "cells": [
+                [
+                  {
+                    "plain_text": "a"
+                  }
+                ],
+                [
+                  {
+                    "plain_text": "b"
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "type": "table_row",
+            "table_row": {
+              "cells": [
+                [
+                  {
+                    "plain_text": "c"
+                  }
+                ],
+                [
+                  {
+                    "plain_text": "d"
+                  }
+                ]
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "type": "column_list",
+        "column_list": {},
+        "children": [
+          {
+            "type": "column",
+            "column": {},
+            "children": [
+              {
+                "type": "paragraph",
+                "paragraph": {
+                  "rich_text": [
+                    {
+                      "plain_text": "в колонке"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "divider",
+        "divider": {}
+      },
+      {
+        "type": "synced_block",
+        "synced_block": {
+          "synced_from": {
+            "block_id": "x"
+          }
+        }
+      },
+      {
+        "type": "synced_block",
+        "synced_block": {
+          "synced_from": null
+        }
+      }
+    ],
+    "expected": "a | b\nc | d\nв колонке\n---\n[synced block]\n[synced block: empty]"
+  },
+  "odd": {
+    "blocks": [
+      {
+        "type": "toggle",
+        "toggle": {
+          "rich_text": [
+            {
+              "plain_text": "свёрнуто"
+            }
+          ]
+        }
+      },
+      {
+        "type": "callout",
+        "callout": {
+          "rich_text": [
+            {
+              "plain_text": "важно"
+            }
+          ]
+        }
+      },
+      {
+        "type": "equation",
+        "equation": {
+          "expression": "E=mc^2"
+        }
+      },
+      {
+        "type": "unsupported",
+        "unsupported": {
+          "block_type": "whiteboard"
+        }
+      },
+      {
+        "type": "meeting_notes",
+        "meeting_notes": {
+          "title": [
+            {
+              "plain_text": "встреча"
+            }
+          ],
+          "status": "transcribing"
+        }
+      },
+      {
+        "type": "breadcrumb",
+        "breadcrumb": {}
+      },
+      {
+        "object": "block",
+        "id": "partial"
+      },
+      {
+        "type": "какой_то_новый",
+        "какой_то_новый": {
+          "rich_text": [
+            {
+              "plain_text": "текст"
+            }
+          ]
+        }
+      }
+    ],
+    "expected": "[toggle] свёрнуто\n[callout] важно\n[equation] E=mc^2\n[unsupported block: whiteboard]\n[meeting_notes] встреча (transcribing)\n[breadcrumb]\n[unreadable block]\nтекст"
+  },
+  "elided": {
+    "blocks": [
+      {
+        "type": "paragraph",
+        "paragraph": {
+          "rich_text": [
+            {
+              "plain_text": "верх"
+            }
+          ]
+        },
+        "elided": "depth"
+      },
+      {
+        "type": "paragraph",
+        "paragraph": {
+          "rich_text": [
+            {
+              "plain_text": "другой"
+            }
+          ]
+        },
+        "elided": "budget"
+      }
+    ],
+    "expected": "верх\n  [nested content: nesting too deep]\nдругой\n  [nested content: request budget exhausted]"
+  }
+}

@@ -1,0 +1,31 @@
+[Unit]
+Description=ntk API
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=ntk
+ExecStart=/opt/ntk/bin/ntk-api
+EnvironmentFile=/etc/ntk/api.env
+Restart=always
+RestartSec=2
+
+# Сервису нужен только сокет Postgres на localhost и собственный лог.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+# 1024 дескриптора — это потолок примерно в тысячу одновременных соединений
+# вместе с файлами и сокетом базы. Всплески агентов упираются в него раньше,
+# чем в память или процессор.
+LimitNOFILE=65535
+ReadWritePaths=/var/log/ntk
+
+[Install]
+WantedBy=multi-user.target

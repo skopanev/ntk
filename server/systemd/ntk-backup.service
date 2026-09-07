@@ -1,0 +1,8 @@
+[Unit]
+Description=Дамп базы ntk в Spaces
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ntk/backup.env
+ExecStart=/opt/ntk/server/backup/pg_backup.sh

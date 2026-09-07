@@ -1,0 +1,16 @@
+node_modules/
+.DS_Store
+.ntkrc
+.medulla/panel-runs/
+.claude/settings.local.json
+
+# Rust
+target/
+
+# Снимки Notion — рабочие данные, не исходники
+notion-*.jsonl
+snapshot-*.jsonl
+
+# Бандл и распакованное дерево — артефакты сборки
+dist/*.mcpb
+dist/mcpb/server/
