@@ -1043,7 +1043,7 @@ pub(crate) fn modules_missing_in_target(source: &[String], target: &[String]) ->
 
 /// Имена, похожие на промах настолько, что их стоит предложить.
 ///
-/// Подстроки одной опечатки не ловят: `fbak` не содержит `proj-b` и не
+/// Подстроки одной опечатки не ловят: `bakend` не содержит `backend` и не
 /// содержится в нём, а имелся в виду именно он. Поэтому расстояние
 /// редактирования, а не вхождение — пропущенная, лишняя или переставленная
 /// буква остаётся в пределах двух правок.
@@ -1316,8 +1316,8 @@ mod project_lifecycle_tests {
     // Ради этого случая проверка и заводилась: опечатка в одну букву.
     #[test]
     fn a_one_letter_typo_finds_its_target() {
-        let near = super::near_misses("fbak", &["proj-b".into(), "proj-a".into(), "ntk".into()]);
-        assert!(near.contains(&"proj-b".to_string()), "не предложен proj-b: {near:?}");
+        let near = super::near_misses("bakend", &["backend".into(), "web".into(), "ntk".into()]);
+        assert!(near.contains(&"backend".to_string()), "не предложен backend: {near:?}");
     }
 
     // Короткие хэндлы: две правки превращают в «похожее» почти всё.
@@ -1332,7 +1332,7 @@ mod project_lifecycle_tests {
 
     #[test]
     fn a_name_unlike_anything_gets_no_suggestions() {
-        let near = super::near_misses("zzzzzzzz", &["proj-b".into(), "ntk".into()]);
+        let near = super::near_misses("zzzzzzzz", &["backend".into(), "ntk".into()]);
         assert!(near.is_empty(), "выдуманы похожие: {near:?}");
     }
 
