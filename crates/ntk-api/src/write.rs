@@ -526,7 +526,16 @@ pub struct Create {
     status: Option<String>,
     #[serde(default)]
     priority: Option<String>,
-    #[serde(default)]
+    /// На проводе поле зовётся `type`, как и при правке (см. Patch), а `kind`
+    /// принимается как псевдоним.
+    ///
+    /// Псевдоним не вкусовщина: структура объявлена deny_unknown_fields, и
+    /// клиент, приславший не то имя, получает отказ РАЗБОРА — наружу это
+    /// выглядит как «ответ сервиса не разобрался», без единого намёка на
+    /// причину. Так и случилось: заведение принимало `kind`, правка — `type`,
+    /// а MCP слал `type` в обе. Уже выпущенные клиенты шлют `kind`, поэтому
+    /// одним переименованием чинить нельзя: сломались бы они.
+    #[serde(default, rename = "type", alias = "kind")]
     kind: Option<String>,
     #[serde(default)]
     assignee: Option<String>,
@@ -1533,4 +1542,40 @@ pub async fn add_modules(
         "deleted": Vec::<String>::new()
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod create_wire_tests {
+    use super::Create;
+
+    // Заведение и правка обязаны звать одно и то же поле одинаково. Расхождение
+    // стоило отказа разбора на КАЖДОМ создании с типом, а наружу оно выглядело
+    // как «ответ сервиса не разобрался» — сообщение, из которого причина никак
+    // не следует.
+    #[test]
+    fn create_accepts_type_as_the_wire_name() {
+        let p: Create = serde_json::from_str(
+            r#"{"workspace":"ws","title":"t","type":"feature"}"#,
+        )
+        .expect("type обязан приниматься");
+        assert_eq!(p.kind.as_deref(), Some("feature"));
+    }
+
+    // Уже выпущенные клиенты шлют `kind`; одним переименованием их бы сломало.
+    #[test]
+    fn create_still_accepts_the_old_name() {
+        let p: Create = serde_json::from_str(
+            r#"{"workspace":"ws","title":"t","kind":"bug"}"#,
+        )
+        .expect("kind обязан приниматься как псевдоним");
+        assert_eq!(p.kind.as_deref(), Some("bug"));
+    }
+
+    // deny_unknown_fields — намеренный выбор: опечатка в имени поля должна
+    // отвергаться, а не проглатываться. Проверяем, что он на месте.
+    #[test]
+    fn an_unknown_field_is_still_refused() {
+        let r = serde_json::from_str::<Create>(r#"{"workspace":"ws","title":"t","tipe":"x"}"#);
+        assert!(r.is_err(), "неизвестное поле обязано отвергаться");
+    }
 }

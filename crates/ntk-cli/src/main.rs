@@ -670,7 +670,7 @@ async fn create(
         "title": title,
         "status": status,
         "priority": priority,
-        "kind": kind,
+        "type": kind,
         "assignee": assignee,
         "project": project,
         "tags": split(tags.clone()),
