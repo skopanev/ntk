@@ -108,7 +108,11 @@ fn tools() -> Value {
          "workspace":ws,
          "project":{"type":"string","description":"Проект — префикс идентификатора тикета."},
          "title":{"type":"string"},"body":{"type":"string","description":"Тело в markdown."},
-         "assignee":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}}}},
+         "assignee":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},
+         "module":{"type":"string","description":"Модуль — единица работы внутри проекта. Допустимые перечисляет ntk_meta; угадывать не нужно."},
+         "priority":{"type":"string"},"status":{"type":"string"},
+         "type":{"type":"string"},
+         "deps":{"type":"array","items":{"type":"string"},"description":"Идентификаторы тикетов, которых этот ждёт."}}}},
       {"name":"ntk_update",
        "annotations":{"title":"Изменить тикет","readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false},
        "description":"Изменить тикет ОДНИМ вызовом: статус, заголовок, тело, исполнитель и теги сразу. Меняется одной транзакцией. Тикет вне группы todo уже кем-то подобран и требует force.",
@@ -118,6 +122,8 @@ fn tools() -> Value {
          "body_append":{"type":"string","description":"Дописать в конец тела, не трогая написанное. Вместе с body не принимается."},
          "assignee":{"type":"string"},
          "tag_edits":{"type":"array","items":{"type":"string"},"description":"Каждая правка со знаком: [\"+alpha\",\"-legacy\"]. Знак обязателен."},
+         "module":{"type":"string","description":"Модуль. Пустая строка снимает его. При смене проекта модуль нового проекта обязателен."},
+         "project":{"type":"string"},"priority":{"type":"string"},"type":{"type":"string"},
          "force":{"type":"boolean"}}}},
       {"name":"ntk_close",
        "annotations":{"title":"Закрыть тикет","readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false},
@@ -282,10 +288,11 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             let mut p = json!({"title": s(args, "title").unwrap_or_default()});
             if let Some(v) = s(args, "project") { p["project"] = json!(v); }
             if let Some(w) = &ws { p["workspace"] = json!(w); }
-            for k in ["body", "assignee"] {
+            for k in ["body", "assignee", "module", "priority", "status", "type"] {
                 if let Some(v) = s(args, k) { p[k] = json!(v); }
             }
             if let Some(t) = args.get("tags") { p["tags"] = t.clone(); }
+            if let Some(d) = args.get("deps") { p["deps"] = d.clone(); }
             match serde_json::from_value(p) {
                 Ok(parsed) => body_text(write::create(st, h, Json(parsed)).await).await,
                 Err(e) => (false, e.to_string()),
@@ -306,7 +313,12 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                     if args.get("body").is_some() && args.get("body_append").is_some() {
                         return (false, "body и body_append вместе не принимаются: либо заменить тело, либо дописать".into());
                     }
-                    for k in ["status", "title", "body", "body_append", "assignee"] {
+                    // module и project здесь же, а не отдельным вызовом: сервер
+                    // меняет всё одной транзакцией, а два вызова оставляют тикет
+                    // видимым наполовину изменённым. Реестр модулей существовал,
+                    // а назвать модуль по MCP было нечем.
+                    for k in ["status", "title", "body", "body_append", "assignee",
+                              "module", "project", "priority", "type"] {
                         if let Some(v) = s(args, k) { p[k] = json!(v); }
                     }
                     if let Some(t) = args.get("tag_edits") { p["tag_edits"] = t.clone(); }

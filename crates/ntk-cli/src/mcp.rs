@@ -132,6 +132,17 @@ pub struct CreateArgs {
     /// Кому. Короткий идентификатор из core.users, например sk.
     pub assignee: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// Модуль — единица работы внутри проекта. Допустимые перечисляет ntk_meta:
+    /// угадывать их не нужно и не следует. Реестр модулей есть, а назвать
+    /// модуль по MCP было НЕЧЕМ — приходилось заводить тикет без него.
+    pub module: Option<String>,
+    pub priority: Option<String>,
+    /// Начальный статус. Без него сервер ставит первый из группы todo.
+    pub status: Option<String>,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    /// Идентификаторы тикетов, которых этот ждёт.
+    pub deps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -175,6 +186,9 @@ pub struct UpdateArgs {
     pub project: Option<String>,
     /// Срок, YYYY-MM-DD. Пустая строка снимает его.
     pub due: Option<String>,
+    /// Модуль. Пустая строка снимает его. При смене проекта модуль нового
+    /// проекта обязателен: молча снять его нельзя.
+    pub module: Option<String>,
     /// Снять гард «тикет уже подобран». Ставить осознанно.
     pub force: Option<bool>,
 }
@@ -321,6 +335,11 @@ impl Ntk {
         if let Some(v) = a.body { body["body"] = v.into(); }
         if let Some(v) = a.assignee { body["assignee"] = v.into(); }
         if let Some(v) = a.tags { body["tags"] = v.into(); }
+        if let Some(v) = a.module { body["module"] = v.into(); }
+        if let Some(v) = a.priority { body["priority"] = v.into(); }
+        if let Some(v) = a.status { body["status"] = v.into(); }
+        if let Some(v) = a.kind { body["type"] = v.into(); }
+        if let Some(v) = a.deps { body["deps"] = v.into(); }
 
         match c.create(&key, &a.workspace, &body).await.map_err(oops)? {
             Some(id) => Ok(CallToolResult::success(vec![Content::text(id)])),
@@ -343,6 +362,7 @@ impl Ntk {
         if let Some(v) = a.body { body["body"] = v.into(); }
         if let Some(v) = a.body_append { body["body_append"] = v.into(); }
         if let Some(v) = a.assignee { body["assignee"] = v.into(); }
+        if let Some(v) = a.module { body["module"] = v.into(); }
         if let Some(t) = a.tag_edits {
             for e in &t {
                 if !e.starts_with('+') && !e.starts_with('-') {
