@@ -64,8 +64,18 @@ impl Config {
             google_client_id: req("GOOGLE_CLIENT_ID")?,
             google_client_secret: req("GOOGLE_CLIENT_SECRET")?,
             google_hd,
-            public_url: std::env::var("PUBLIC_URL")
-                .unwrap_or_else(|_| "https://ntk.example.com".into()),
+            // Обязателен, и без умолчания намеренно.
+            //
+            // Отсюда строятся адреса в .well-known и redirect_uri для Google:
+            // Claude читает документы обнаружения и идёт ПО НИМ. Умолчание на
+            // адрес-заглушку давало работающий с виду сервис, который рассылал
+            // клиентов в никуда — снаружи это выглядит как «MCP сломался», а в
+            // журнале ни одной ошибки. Так и случилось, когда адрес убрали из
+            // репозитория, а в окружение положить забыли.
+            //
+            // Отказ при запуске громче: сервис не поднимется, и починка займёт
+            // минуту вместо вечера догадок.
+            public_url: req("PUBLIC_URL")?,
             spaces_key: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             spaces_secret: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
             spaces_bucket: std::env::var("SPACES_BUCKET").ok(),
