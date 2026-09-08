@@ -67,6 +67,18 @@ fn filter_query(f: &Filters) -> Vec<(&'static str, String)> {
     q
 }
 
+/// Отборы захвата. Отдельно от `prefer` намеренно: prefer задаёт ПОРЯДОК и
+/// ничего не отсекает, отбор ИСКЛЮЧАЕТ.
+#[derive(Default)]
+pub struct Pick<'a> {
+    pub tag: Option<&'a str>,
+    pub strict: bool,
+    pub project: Option<&'a str>,
+    pub module: Option<&'a str>,
+    pub has_module: bool,
+    pub assignee: Option<&'a str>,
+}
+
 impl Client {
     pub fn new(base: &str) -> Self {
         Self {
@@ -218,6 +230,7 @@ impl Client {
         key: &str,
         workspace: &str,
         prefer: Option<&str>,
+        f: &Pick<'_>,
     ) -> Result<Option<Claimed>> {
         let mut req = self
             .http
@@ -227,6 +240,12 @@ impl Client {
         if let Some(p) = prefer {
             req = req.query(&[("prefer", p)]);
         }
+        if let Some(v) = f.tag { req = req.query(&[("tag", v)]); }
+        if f.strict { req = req.query(&[("strict", "true")]); }
+        if let Some(v) = f.project { req = req.query(&[("project", v)]); }
+        if let Some(v) = f.module { req = req.query(&[("module", v)]); }
+        if f.has_module { req = req.query(&[("has_module", "true")]); }
+        if let Some(v) = f.assignee { req = req.query(&[("assignee", v)]); }
         let r = req.send().await.context("сервис недоступен")?;
         let code = r.status();
         // «Свободных нет» приходит как 204 с ПУСТЫМ телом, и разбирать его как

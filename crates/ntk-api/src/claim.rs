@@ -39,10 +39,7 @@ pub struct Claimed {
 /// Шкалу приоритетов подъём не переворачивает: `high` из бэклога по-прежнему
 /// обгоняет `low`-блокер начатого `low`, потому что сравниваются ранги, а не
 /// признак «разблокирует». Признак работает тай-брейком среди равных.
-pub async fn next(tx: &Transaction<'_>, prefer: &[String]) -> anyhow::Result<Option<Claimed>> {
-    let rows = tx
-        .query(
-            "with recursive
+const HEAD: &str = r#"with recursive
                -- Начатое — это ГРУППА, а не статус с таким именем: в группе
                -- in_progress лежат и `in_progress`, и `to_test`. По литералу
                -- тикет на тестировании перестал бы считаться начатым, и его
@@ -97,7 +94,9 @@ pub async fn next(tx: &Transaction<'_>, prefer: &[String]) -> anyhow::Result<Opt
                                join statuses ds on ds.name = dep.status
                               where d.ticket_id = c.id
                                 and dep.deleted_at is null
-                                and ds.grp <> 'complete')
+                                and ds.grp <> 'complete')"#;
+
+const TAIL: &str = r#"
                      order by
                        -- Позиция первого совпавшего тега в списке предпочтений.
                        -- Нет совпадений — в конец, но не выбывает.
@@ -123,16 +122,86 @@ pub async fn next(tx: &Transaction<'_>, prefer: &[String]) -> anyhow::Result<Opt
                        -- Ровно то, ради чего затевался переезд, и ломалось молча:
                        -- агент видел «свободных нет» при полной очереди.
                        for update of c skip locked)
-          returning t.id, t.title, t.status",
-            &[&prefer],
-        )
-        .await?;
+          returning t.id, t.title, t.status"#;
+
+/// Отборы для захвата. Отдельно от `prefer` намеренно: prefer задаёт ПОРЯДОК
+/// и ничего не отсекает, отбор — ИСКЛЮЧАЕТ. Слить их в одно значило бы потерять
+/// «сначала инфраструктуру, а если её нет — дай что угодно».
+///
+/// Статуса здесь нет и не будет: next берёт только `open` и только с закрытыми
+/// зависимостями. Дать сюда произвольный статус — разрешить захват начатого или
+/// заблокированного, то есть ровно то, от чего гард и стоит.
+#[derive(Default)]
+pub struct Pick {
+    pub tags: Vec<String>,
+    /// Тег должен совпасть целиком, а не войти частью.
+    pub strict: bool,
+    pub project: Option<String>,
+    pub module: Option<String>,
+    /// Любой действующий модуль вместо конкретного имени.
+    ///
+    /// Диспетчеру нужно «у тикета вообще назначена единица работы», а не
+    /// перечисление двухсот имён. Архивный не считается: работа по нему больше
+    /// не ведётся, и выдавать такой тикет исполнителю незачем.
+    pub has_module: bool,
+    pub assignee: Option<String>,
+}
+
+pub async fn next(
+    tx: &Transaction<'_>,
+    prefer: &[String],
+    f: &Pick,
+) -> anyhow::Result<Option<Claimed>> {
+    let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&prefer];
+    let mut cond = String::new();
+    if let Some(v) = &f.project {
+        args.push(v);
+        cond.push_str(&format!(" and c.project_id = ${}", args.len()));
+    }
+    if let Some(v) = &f.module {
+        args.push(v);
+        cond.push_str(&format!(" and c.module = ${}", args.len()));
+    }
+    if f.has_module {
+        cond.push_str(
+            " and c.module is not null
+               and not exists (select 1 from modules m
+                                where m.project_id = c.project_id
+                                  and m.name = c.module
+                                  and m.archived_at is not null)",
+        );
+    }
+    if let Some(v) = &f.assignee {
+        args.push(v);
+        cond.push_str(&format!(" and c.assignee = ${}", args.len()));
+    }
+    if !f.tags.is_empty() {
+        if f.strict {
+            args.push(&f.tags);
+            // Массив и `@>` берут GIN-индекс; `= any(...)` уходит в скан.
+            cond.push_str(&format!(" and c.tags @> ${}::text[]", args.len()));
+        } else {
+            // Каждый названный тег обязан войти хотя бы в один тег тикета:
+            // «и» между названными, вхождение внутри каждого — как в списке.
+            for t in &f.tags {
+                args.push(t);
+                cond.push_str(&format!(
+                    " and exists (select 1 from unnest(c.tags) x where x ilike '%' || ${} || '%')",
+                    args.len()
+                ));
+            }
+        }
+    }
+
+    let sql = format!("{HEAD}{cond}{TAIL}");
+    let rows = tx.query(&sql, &args).await?;
     Ok(rows.first().map(|r| Claimed {
         id: r.get(0),
         title: r.get(1),
         status: r.get(2),
     }))
 }
+
 
 /// `start <id>` — взять КОНКРЕТНЫЙ тикет.
 ///
@@ -214,4 +283,29 @@ pub async fn requires_force(tx: &Transaction<'_>, status: &str) -> anyhow::Resul
         .await?
         .map(|r| r.get(0))
         .unwrap_or(false))
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::Pick;
+
+    // Пустой отбор не должен добавлять к запросу ни одного условия: иначе
+    // `ntk next` без флагов начал бы отсекать то, что раньше выдавал.
+    #[test]
+    fn an_empty_pick_narrows_nothing() {
+        let p = Pick::default();
+        assert!(p.tags.is_empty());
+        assert!(!p.strict && !p.has_module);
+        assert!(p.project.is_none() && p.module.is_none() && p.assignee.is_none());
+    }
+
+    // Разница, ради которой отбор заведён отдельно от prefer: prefer задаёт
+    // порядок и ничего не отсекает, отбор исключает. Слить их — потерять
+    // «сначала инфраструктуру, а если её нет, дай что угодно».
+    #[test]
+    fn a_pick_is_not_a_preference() {
+        let p = Pick { tags: vec!["infra".into()], ..Default::default() };
+        assert_eq!(p.tags, vec!["infra".to_string()]);
+        // prefer в Pick нет и быть не должно — он приходит отдельным аргументом.
+    }
 }

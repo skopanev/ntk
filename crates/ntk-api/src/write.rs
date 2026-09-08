@@ -59,13 +59,37 @@ async fn enter(
 #[derive(Deserialize)]
 pub struct Ws {
     workspace: Option<String>,
-    /// Теги в порядке предпочтения: `?prefer=infra,alpha`.
+}
+
+/// Параметры захвата: порядок и ОТБОР, отдельными полями.
+///
+/// Своя структура, а не расширенная Ws: у Ws четыре других потребителя, и
+/// отборы захвата им не принадлежат. Общая структура делала бы вид, что
+/// `?module=` что-то значит и для них.
+#[derive(Deserialize)]
+pub struct NextQuery {
+    workspace: Option<String>,
+    /// Теги в порядке предпочтения. ПОРЯДОК, а не отбор.
     prefer: Option<String>,
+    /// Отбор по тегам через запятую. Не подошло — не выдаётся вовсе.
+    tag: Option<String>,
+    #[serde(default)]
+    strict: bool,
+    project: Option<String>,
+    module: Option<String>,
+    /// Любой действующий модуль вместо конкретного имени.
+    #[serde(default)]
+    has_module: bool,
+    assignee: Option<String>,
 }
 
 /// Взять любой свободный тикет. Параллельные агенты разбирают очередь, не
 /// мешая друг другу.
-pub async fn next(State(app): State<Arc<App>>, headers: HeaderMap, Query(q): Query<Ws>) -> Response {
+pub async fn next(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Query(q): Query<NextQuery>,
+) -> Response {
     let (mut client, actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -84,7 +108,24 @@ pub async fn next(State(app): State<Arc<App>>, headers: HeaderMap, Query(q): Que
         .map(str::to_string)
         .collect();
 
-    match claim::next(&tx, &prefer).await {
+    let pick = claim::Pick {
+        tags: q
+            .tag
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        strict: q.strict,
+        project: q.project.clone(),
+        module: q.module.clone(),
+        has_module: q.has_module,
+        assignee: q.assignee.clone(),
+    };
+
+    match claim::next(&tx, &prefer, &pick).await {
         Ok(Some(c)) => {
             if tx.commit().await.is_err() {
                 return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");

@@ -117,8 +117,20 @@ pub struct TagArgs {
 pub struct NextArgs {
     pub workspace: String,
     /// Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр:
-    /// если по ним ничего нет, будет взят любой свободный тикет.
+    /// если по ним ничего нет, будет взят любой подходящий тикет.
     pub prefer: Option<String>,
+    /// Отбор по тегам через запятую. В отличие от prefer ИСКЛЮЧАЕТ: не
+    /// подошло — не выдаётся вовсе.
+    pub tag: Option<String>,
+    /// Тег должен совпасть целиком, а не войти частью.
+    pub strict: Option<bool>,
+    pub project: Option<String>,
+    /// Отбор по конкретному модулю.
+    pub module: Option<String>,
+    /// Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы
+    /// назначена». Архивный не считается.
+    pub has_module: Option<bool>,
+    pub assignee: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -306,7 +318,15 @@ impl Ntk {
                           один тикет не достанется двоим.")]
     async fn ntk_next(&self, Parameters(a): Parameters<NextArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
-        match c.next(&key, &a.workspace, a.prefer.as_deref()).await.map_err(oops)? {
+        let pick = crate::api::Pick {
+            tag: a.tag.as_deref(),
+            strict: a.strict.unwrap_or(false),
+            project: a.project.as_deref(),
+            module: a.module.as_deref(),
+            has_module: a.has_module.unwrap_or(false),
+            assignee: a.assignee.as_deref(),
+        };
+        match c.next(&key, &a.workspace, a.prefer.as_deref(), &pick).await.map_err(oops)? {
             Some(t) => Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string(&t).map_err(oops)?,
             )])),

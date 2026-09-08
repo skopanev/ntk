@@ -280,10 +280,28 @@ enum Cmd {
     /// --prefer задаёт ПОРЯДОК предпочтения тегов, а не фильтр: когда тикеты
     /// с первым тегом кончились, берётся следующий, и полоса не простаивает.
     Next {
-        /// Теги в порядке предпочтения, через запятую. Не фильтр: если по ним
-        /// ничего нет, будет взят любой свободный тикет.
+        /// Теги в порядке предпочтения. ПОРЯДОК, а не отбор: если по ним
+        /// ничего нет, будет взят любой подходящий тикет.
         #[arg(long)]
         prefer: Option<String>,
+        /// Отбор по тегам через запятую. В отличие от --prefer ИСКЛЮЧАЕТ:
+        /// не подошло — не выдаётся вовсе.
+        #[arg(short = 't', long)]
+        tag: Option<String>,
+        /// Тег должен совпасть целиком, а не войти частью.
+        #[arg(long)]
+        strict: bool,
+        #[arg(short = 'P', long)]
+        project: Option<String>,
+        /// Отбор по конкретному модулю.
+        #[arg(long)]
+        module: Option<String>,
+        /// Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы
+        /// назначена». Архивный не считается — работа по нему не ведётся.
+        #[arg(long, conflicts_with = "module")]
+        has_module: bool,
+        #[arg(short = 'a', long)]
+        assignee: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -306,7 +324,8 @@ async fn main() -> Result<()> {
         Cmd::Projects { archive, unarchive, move_from, to, json } =>
             projects(ws, archive, unarchive, move_from, to, json).await,
         Cmd::Show { id, json } => show(id, ws, json).await,
-        Cmd::Next { prefer, json } => next(ws, prefer, json).await,
+        Cmd::Next { prefer, tag, strict, project, module, has_module, assignee, json } =>
+            next(ws, prefer, tag, strict, project, module, has_module, assignee, json).await,
         Cmd::Create { title, project, priority, assignee, kind, status, tags, body, deps, module, json } =>
             create(title, ws, project, priority, assignee, kind, status, tags, body, deps, module, json).await,
         Cmd::Close { id, force } => close(id, ws, force).await,
@@ -539,7 +558,18 @@ async fn show(id: String, workspace: Option<String>, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn next(workspace: Option<String>, prefer: Option<String>, json: bool) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+async fn next(
+    workspace: Option<String>,
+    prefer: Option<String>,
+    tag: Option<String>,
+    strict: bool,
+    project: Option<String>,
+    module: Option<String>,
+    has_module: bool,
+    assignee: Option<String>,
+    json: bool,
+) -> Result<()> {
     let started = std::time::Instant::now();
     let cfg = config::load()?;
     let key = config::require_key(&cfg)?;
@@ -547,7 +577,15 @@ async fn next(workspace: Option<String>, prefer: Option<String>, json: bool) -> 
         .or_else(config::workspace_from_rc)
         .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
 
-    let taken = api::Client::new(&cfg.url).next(key, &ws, prefer.as_deref()).await?;
+    let pick = api::Pick {
+        tag: tag.as_deref(),
+        strict,
+        project: project.as_deref(),
+        module: module.as_deref(),
+        has_module,
+        assignee: assignee.as_deref(),
+    };
+    let taken = api::Client::new(&cfg.url).next(key, &ws, prefer.as_deref(), &pick).await?;
 
     match taken {
         None => {

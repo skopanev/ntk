@@ -96,7 +96,13 @@ fn tools() -> Value {
        "description":"Взять следующий свободный тикет в работу. Захват атомарный: один тикет не достанется двоим.",
        "inputSchema":{"type":"object","required":["workspace"],"properties":{
          "workspace":ws,
-         "prefer":{"type":"string","description":"Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр."}}}},
+         "prefer":{"type":"string","description":"Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр: если по ним ничего нет, будет взят любой подходящий."},
+         "tag":{"type":"string","description":"Отбор по тегам через запятую. В отличие от prefer ИСКЛЮЧАЕТ: не подошло — не выдаётся вовсе."},
+         "strict":{"type":"boolean","description":"Тег должен совпасть целиком, а не войти частью."},
+         "project":{"type":"string"},
+         "module":{"type":"string","description":"Отбор по конкретному модулю."},
+         "has_module":{"type":"boolean","description":"Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы назначена». Архивный не считается."},
+         "assignee":{"type":"string"}}}},
       {"name":"ntk_start",
        "annotations":{"title":"Взять тикет в работу","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},
        "description":"Взять КОНКРЕТНЫЙ тикет в работу. Если его уже взяли, вернётся отказ с текущим статусом, а не тишина.",
@@ -253,7 +259,12 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
 
         "ntk_next" => {
             let mut uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
-            if let Some(p) = s(args, "prefer") { uri.push_str(&format!("&prefer={}", urlencoding::encode(&p))); }
+            for k in ["prefer", "tag", "project", "module", "assignee"] {
+                if let Some(v) = s(args, k) { uri.push_str(&format!("&{k}={}", urlencoding::encode(&v))); }
+            }
+            for k in ["strict", "has_module"] {
+                if args.get(k).and_then(|v| v.as_bool()).unwrap_or(false) { uri.push_str(&format!("&{k}=true")); }
+            }
             match Query::try_from_uri(&uri.parse().unwrap()) {
                 Ok(Query(qq)) => body_text(write::next(st, h, Query(qq)).await).await,
                 Err(e) => (false, e.to_string()),
