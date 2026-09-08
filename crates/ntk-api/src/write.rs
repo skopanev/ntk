@@ -81,6 +81,9 @@ pub struct NextQuery {
     #[serde(default)]
     has_module: bool,
     assignee: Option<String>,
+    /// Показать, что БЫ взялось, ничего не забирая.
+    #[serde(default)]
+    dry_run: bool,
 }
 
 /// Взять любой свободный тикет. Параллельные агенты разбирают очередь, не
@@ -123,6 +126,7 @@ pub async fn next(
         module: q.module.clone(),
         has_module: q.has_module,
         assignee: q.assignee.clone(),
+        dry_run: q.dry_run,
     };
 
     match claim::next(&tx, &prefer, &pick).await {
@@ -133,8 +137,17 @@ pub async fn next(
             // Захват больше не пишется в assignee — там владелец тикета, а не
             // тот, кто взял его в работу. Лог остаётся единственным следом
             // того, КТО взял, и потому обязателен.
+            if q.dry_run {
+                // Ни записи, ни строчки «тикет взят» в журнале: журнал —
+                // единственный след того, КТО взял, и предпросмотр не должен
+                // оставлять в нём ложный след.
+                return Json(json!({
+                    "id": c.id, "title": c.title, "status": c.status, "claimed": false
+                }))
+                .into_response();
+            }
             tracing::info!(actor = %actor.user_id, ticket = %c.id, workspace = %ws, "тикет взят");
-            Json(json!({"id": c.id, "title": c.title, "status": c.status})).into_response()
+            Json(json!({"id": c.id, "title": c.title, "status": c.status, "claimed": true})).into_response()
         }
         Ok(None) => (StatusCode::NO_CONTENT, ()).into_response(),
         Err(e) => {
@@ -165,7 +178,7 @@ pub async fn start(
                 return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
             }
             tracing::info!(actor = %actor.user_id, ticket = %c.id, workspace = %ws, "тикет взят");
-            Json(json!({"id": c.id, "title": c.title, "status": c.status})).into_response()
+            Json(json!({"id": c.id, "title": c.title, "status": c.status, "claimed": true})).into_response()
         }
         Ok(claim::StartOutcome::AlreadyTaken { status, agent }) => (
             StatusCode::CONFLICT,

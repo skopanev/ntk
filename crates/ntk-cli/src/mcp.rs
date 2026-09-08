@@ -131,6 +131,9 @@ pub struct NextArgs {
     /// назначена». Архивный не считается.
     pub has_module: Option<bool>,
     pub assignee: Option<String>,
+    /// Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же.
+    /// Ответ — совет, а не бронь: к моменту захвата тикет может уйти другому.
+    pub dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -325,6 +328,7 @@ impl Ntk {
             module: a.module.as_deref(),
             has_module: a.has_module.unwrap_or(false),
             assignee: a.assignee.as_deref(),
+            dry_run: a.dry_run.unwrap_or(false),
         };
         match c.next(&key, &a.workspace, a.prefer.as_deref(), &pick).await.map_err(oops)? {
             Some(t) => Ok(CallToolResult::success(vec![Content::text(

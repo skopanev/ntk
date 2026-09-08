@@ -77,6 +77,8 @@ pub struct Pick<'a> {
     pub module: Option<&'a str>,
     pub has_module: bool,
     pub assignee: Option<&'a str>,
+    /// Показать, что БЫ взялось, ничего не забирая.
+    pub dry_run: bool,
 }
 
 impl Client {
@@ -246,6 +248,7 @@ impl Client {
         if let Some(v) = f.module { req = req.query(&[("module", v)]); }
         if f.has_module { req = req.query(&[("has_module", "true")]); }
         if let Some(v) = f.assignee { req = req.query(&[("assignee", v)]); }
+        if f.dry_run { req = req.query(&[("dry_run", "true")]); }
         let r = req.send().await.context("сервис недоступен")?;
         let code = r.status();
         // «Свободных нет» приходит как 204 с ПУСТЫМ телом, и разбирать его как

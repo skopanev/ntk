@@ -102,7 +102,8 @@ fn tools() -> Value {
          "project":{"type":"string"},
          "module":{"type":"string","description":"Отбор по конкретному модулю."},
          "has_module":{"type":"boolean","description":"Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы назначена». Архивный не считается."},
-         "assignee":{"type":"string"}}}},
+         "assignee":{"type":"string"},
+         "dry_run":{"type":"boolean","description":"Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же. Ответ — совет, а не бронь: к моменту захвата тикет может уйти другому."}}}},
       {"name":"ntk_start",
        "annotations":{"title":"Взять тикет в работу","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},
        "description":"Взять КОНКРЕТНЫЙ тикет в работу. Если его уже взяли, вернётся отказ с текущим статусом, а не тишина.",
@@ -262,7 +263,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             for k in ["prefer", "tag", "project", "module", "assignee"] {
                 if let Some(v) = s(args, k) { uri.push_str(&format!("&{k}={}", urlencoding::encode(&v))); }
             }
-            for k in ["strict", "has_module"] {
+            for k in ["strict", "has_module", "dry_run"] {
                 if args.get(k).and_then(|v| v.as_bool()).unwrap_or(false) { uri.push_str(&format!("&{k}=true")); }
             }
             match Query::try_from_uri(&uri.parse().unwrap()) {

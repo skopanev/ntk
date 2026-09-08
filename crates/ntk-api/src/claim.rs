@@ -39,7 +39,7 @@ pub struct Claimed {
 /// Шкалу приоритетов подъём не переворачивает: `high` из бэклога по-прежнему
 /// обгоняет `low`-блокер начатого `low`, потому что сравниваются ранги, а не
 /// признак «разблокирует». Признак работает тай-брейком среди равных.
-const HEAD: &str = r#"with recursive
+const CTES: &str = r#"with recursive
                -- Начатое — это ГРУППА, а не статус с таким именем: в группе
                -- in_progress лежат и `in_progress`, и `to_test`. По литералу
                -- тикет на тестировании перестал бы считаться начатым, и его
@@ -71,10 +71,12 @@ const HEAD: &str = r#"with recursive
                needed as (
                  select id, min(rank) as rank from unblocks group by id
                )
-            update tickets t
-                set status = 'in_progress'
-              where t.id = (
-                    select c.id from tickets c
+"#;
+
+/// Общая часть отбора: откуда и что считается пригодным. Одна на обе формы —
+/// захват и предпросмотр обязаны выбирать ОДИН и тот же тикет, иначе dry-run
+/// показывал бы не то, что возьмётся.
+const BODY: &str = r#"
                       join statuses s on s.name = c.status
                       left join needed n on n.id = c.id
                      where s.grp = 'todo' and c.status = 'open' and c.deleted_at is null
@@ -96,7 +98,7 @@ const HEAD: &str = r#"with recursive
                                 and dep.deleted_at is null
                                 and ds.grp <> 'complete')"#;
 
-const TAIL: &str = r#"
+const ORDER: &str = r#"
                      order by
                        -- Позиция первого совпавшего тега в списке предпочтений.
                        -- Нет совпадений — в конец, но не выбывает.
@@ -112,7 +114,10 @@ const TAIL: &str = r#"
                        -- блокер с начатого: работа, в которую уже вложились,
                        -- дороже ещё не начатой.
                        case when n.id is null then 1 else 0 end,
-                       c.created_at
+                       c.created_at"#;
+
+/// Хвост захвата: блокировка строки и возврат взятого.
+const CLAIM_TAIL: &str = r#"
                      limit 1
                        -- OF c обязательно: без него FOR UPDATE запирает строки
                        -- ВСЕХ таблиц джойна, включая справочник statuses. Там
@@ -145,6 +150,17 @@ pub struct Pick {
     /// не ведётся, и выдавать такой тикет исполнителю незачем.
     pub has_module: bool,
     pub assignee: Option<String>,
+    /// Показать, что БЫ взялось, ничего не забирая.
+    ///
+    /// Отбор и порядок те же, тикет тот же — разница только в том, что записи
+    /// нет. Нужен диспетчеру, который проверяет свою выборку, и проверяющему,
+    /// который не должен ради одного взгляда уводить тикет у флота.
+    ///
+    /// Ответ здесь СОВЕТ, а не бронь: двое подряд увидят один и тот же тикет,
+    /// и к моменту захвата его может уже не быть. Поэтому строка не запирается
+    /// (`for update` тут был бы вреден: он держал бы чужие захваты), а клиент
+    /// говорит вслух, что тикет не взят.
+    pub dry_run: bool,
 }
 
 pub async fn next(
@@ -193,7 +209,19 @@ pub async fn next(
         }
     }
 
-    let sql = format!("{HEAD}{cond}{TAIL}");
+    // Обе формы собираются из ОДНИХ И ТЕХ ЖЕ частей: отбор и порядок общие,
+    // расходятся только начало и хвост. Иначе предпросмотр однажды показал бы
+    // не тот тикет, который возьмётся, и доверять ему было бы нельзя.
+    let sql = if f.dry_run {
+        format!("{CTES} select c.id, c.title, c.status from tickets c {BODY}{cond}{ORDER}\n limit 1")
+    } else {
+        format!(
+            "{CTES}            update tickets t
+                set status = 'in_progress'
+              where t.id = (
+                    select c.id from tickets c {BODY}{cond}{ORDER}{CLAIM_TAIL}"
+        )
+    };
     let rows = tx.query(&sql, &args).await?;
     Ok(rows.first().map(|r| Claimed {
         id: r.get(0),

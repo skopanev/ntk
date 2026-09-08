@@ -302,6 +302,13 @@ enum Cmd {
         has_module: bool,
         #[arg(short = 'a', long)]
         assignee: Option<String>,
+        /// Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же,
+        /// тикет тот же — разница только в отсутствии записи.
+        ///
+        /// Ответ здесь совет, а не бронь: к моменту захвата тикет может уже
+        /// уйти другому.
+        #[arg(long)]
+        dry_run: bool,
         #[arg(long)]
         json: bool,
     },
@@ -324,8 +331,8 @@ async fn main() -> Result<()> {
         Cmd::Projects { archive, unarchive, move_from, to, json } =>
             projects(ws, archive, unarchive, move_from, to, json).await,
         Cmd::Show { id, json } => show(id, ws, json).await,
-        Cmd::Next { prefer, tag, strict, project, module, has_module, assignee, json } =>
-            next(ws, prefer, tag, strict, project, module, has_module, assignee, json).await,
+        Cmd::Next { prefer, tag, strict, project, module, has_module, assignee, dry_run, json } =>
+            next(ws, prefer, tag, strict, project, module, has_module, assignee, dry_run, json).await,
         Cmd::Create { title, project, priority, assignee, kind, status, tags, body, deps, module, json } =>
             create(title, ws, project, priority, assignee, kind, status, tags, body, deps, module, json).await,
         Cmd::Close { id, force } => close(id, ws, force).await,
@@ -568,6 +575,7 @@ async fn next(
     module: Option<String>,
     has_module: bool,
     assignee: Option<String>,
+    dry_run: bool,
     json: bool,
 ) -> Result<()> {
     let started = std::time::Instant::now();
@@ -584,6 +592,7 @@ async fn next(
         module: module.as_deref(),
         has_module,
         assignee: assignee.as_deref(),
+        dry_run,
     };
     let taken = api::Client::new(&cfg.url).next(key, &ws, prefer.as_deref(), &pick).await?;
 
@@ -600,6 +609,9 @@ async fn next(
             } else {
                 println!("{}  {}", t.id, t.title);
                 println!("статус: {}", t.status);
+                // Сказать вслух обязательно: иначе вывод неотличим от захвата,
+                // и человек уйдёт работать над тикетом, который ему не выдан.
+                if dry_run { println!("НЕ взят: показано, что взялось бы"); }
             }
             eprintln!("· took {} ms", started.elapsed().as_millis());
     Ok(())
