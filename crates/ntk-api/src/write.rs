@@ -831,6 +831,40 @@ pub async fn meta(
         Ok(v) => v,
         Err(r) => return r,
     };
+
+    // Люди читаются ДО транзакции, и это не стиль, а необходимость.
+    //
+    // db::begin делает `SET LOCAL ROLE ntk_ws_<воркспейс>`, а ntk_api объявлен
+    // NOINHERIT: внутри транзакции прав на схему core уже нет, и запрос к
+    // core.users отвечает «permission denied for schema core». Изоляция
+    // работает как задумано — общее читается до входа в роль воркспейса.
+    //
+    // Раньше запрос стоял внутри и отказ ГЛОТАЛСЯ через unwrap_or_default:
+    // meta отвечала «людей нет» для ЛЮБОГО воркспейса, хотя в core.user_workspaces
+    // их было пять, шесть и два. Пустой список неотличим от «никого не завели»,
+    // поэтому агенты не могли узнать допустимые имена исполнителей и подставляли
+    // выдуманные, а внешний ключ на core.users отвергал запись уже потом.
+    let people: Vec<serde_json::Value> = match client
+        .query(
+            "select u.id, u.kind from core.users u
+               join core.user_workspaces uw on uw.user_id = u.id
+              where uw.workspace = $1 and u.active order by u.id",
+            &[&ws],
+        )
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .map(|r| json!({"id": r.get::<_, String>(0), "kind": r.get::<_, String>(1)}))
+            .collect(),
+        Err(e) => {
+            // Отказ называется вслух: пустой список означал бы «никого нет»,
+            // а это другой ответ.
+            tracing::error!(error = %e, workspace = %ws, "не удалось прочитать людей воркспейса");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        }
+    };
+
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
@@ -877,18 +911,6 @@ pub async fn meta(
                     "name": r.get::<_, String>(1),
                     "archived": r.get::<_, bool>(2),
                 }))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let people = tx
-        .query("select u.id, u.kind from core.users u
-                  join core.user_workspaces uw on uw.user_id = u.id
-                 where uw.workspace = $1 and u.active order by u.id", &[&ws])
-        .await
-        .map(|rows| {
-            rows.iter()
-                .map(|r| json!({"id": r.get::<_, String>(0), "kind": r.get::<_, String>(1)}))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
