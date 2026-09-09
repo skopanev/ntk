@@ -502,6 +502,26 @@ pub async fn patch(
             tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, forced = p.force, "тикет изменён");
             Json(json!({"id": id, "updated": true})).into_response()
         }
+        // Нарушенное ограничение — ошибка ВЫЗЫВАЮЩЕГО, а не сбой сервиса.
+        //
+        // Раньше здесь любая неудача сводилась к «внутренняя ошибка» с кодом
+        // 500: неизвестный исполнитель или незаведённый модуль выглядели как
+        // поломка сервера, и найти причину было нечем — ни поля, ни намёка.
+        Err(e) => {
+            let db = e.as_db_error();
+            let constraint = db.and_then(|d| d.constraint()).unwrap_or_default();
+            tracing::error!(
+                error = %e,
+                constraint = %constraint,
+                detail = %db.map(|d| d.message()).unwrap_or_default(),
+                ticket = %id, workspace = %ws,
+                "не удалось изменить тикет"
+            );
+            match explain_constraint(constraint) {
+                Some(m) => oops(StatusCode::BAD_REQUEST, &m),
+                None => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            }
+        }
         _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     }
 }
@@ -639,13 +659,32 @@ pub async fn create(
             // Ссылка на несуществующий статус, приоритет или исполнителя — это
             // ошибка вызывающего, а не сбой: сказать, что именно не так,
             // дешевле, чем «внутренняя ошибка» и чтение логов.
-            let msg = e.to_string();
-            let code = if msg.contains("foreign key") || msg.contains("check constraint") {
+            let db = e.as_db_error();
+            let constraint = db.and_then(|d| d.constraint()).unwrap_or_default();
+            // В журнал идут подробности, а не «db error»: без них причину
+            // приходится искать перебором даже по логу.
+            tracing::error!(
+                error = %e,
+                constraint = %constraint,
+                detail = %db.map(|d| d.message()).unwrap_or_default(),
+                "не удалось создать тикет"
+            );
+            let msg = constraint.to_string();
+            // База знает, КАКОЕ ограничение не прошло, — значит и человек должен
+            // знать. Прежнее сообщение перечисляло пять возможных причин разом:
+            // «проверьте статус, приоритет, исполнителя, модуль и формат id».
+            // По такому тексту виновника ищут перебором, и именно этим занялся
+            // PM, когда заведение отказало.
+            if let Some(m) = explain_constraint(&msg) {
+                return oops(StatusCode::BAD_REQUEST, &m);
+            }
+            // Ограничение нарушено, но какое — не опознали: это всё равно
+            // ошибка запроса, а не сбой.
+            let code = if db.is_some() {
                 StatusCode::BAD_REQUEST
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            tracing::error!(error = %e, "не удалось создать тикет");
             return oops(code, "не удалось создать тикет: проверьте статус, приоритет, исполнителя, модуль и формат id");
         }
     }
@@ -1599,5 +1638,76 @@ mod create_wire_tests {
     fn an_unknown_field_is_still_refused() {
         let r = serde_json::from_str::<Create>(r#"{"workspace":"ws","title":"t","tipe":"x"}"#);
         assert!(r.is_err(), "неизвестное поле обязано отвергаться");
+    }
+}
+
+/// Переводит нарушенное ограничение в понятное объяснение.
+///
+/// Принимает ИМЯ ограничения из структурированной ошибки, а не её текст.
+/// Текстом пользоваться нельзя: `Error::to_string()` у драйвера возвращает
+/// ровно «db error», без единой подробности. Прежняя проверка искала в этой
+/// строке подстроку «foreign key» и потому не срабатывала никогда — нарушение
+/// ограничения уходило наружу как 500, хотя ошибка была в запросе.
+///
+/// Возвращает None, если ограничение не опознано: выдумывать причину хуже,
+/// чем признать её неизвестной.
+pub(crate) fn explain_constraint(err: &str) -> Option<String> {
+    let m = |field: &str, hint: &str| Some(format!("{field}. {hint}"));
+    if err.contains("tickets_assignee_fkey") {
+        return m("неизвестный исполнитель", "Допустимых перечисляет ntk meta.");
+    }
+    if err.contains("tickets_status_fkey") {
+        return m("неизвестный статус", "Допустимые перечисляет ntk meta.");
+    }
+    if err.contains("tickets_priority_fkey") {
+        return m("неизвестный приоритет", "Допустимые перечисляет ntk meta.");
+    }
+    if err.contains("tickets_project_id_fkey") {
+        return m("неизвестный проект", "Список даёт ntk meta.");
+    }
+    if err.contains("tickets_module_fk") {
+        // Ключ идёт на ПАРУ, поэтому имя модуля из чужого проекта тоже не
+        // подойдёт — сказать это сразу дешевле, чем искать опечатку в имени.
+        return m(
+            "модуль не заведён в этом проекте",
+            "Внешний ключ идёт на пару проект+модуль, поэтому имя из другого проекта не подойдёт. Действующие перечисляет ntk modules -P <проект>, завести новый — ntk modules -P <проект> --add.",
+        );
+    }
+    if err.contains("tickets_id_check") {
+        return m(
+            "недопустимый идентификатор",
+            "Разрешены буквы, цифры, дефис и подчёркивание, от 3 до 64 символов.",
+        );
+    }
+    if err.contains("tickets_pkey") {
+        return m("такой идентификатор уже занят", "Идентификатор назначает сервер; присылать свой нужно только при переносе данных.");
+    }
+    None
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::explain_constraint;
+
+    // Сообщение обязано называть ОДНУ причину, а не перечислять пять: по списку
+    // виновника ищут перебором.
+    #[test]
+    fn each_constraint_names_its_own_field() {
+        for (err, want) in [
+            ("... violates foreign key constraint \"tickets_assignee_fkey\"", "исполнитель"),
+            ("... violates foreign key constraint \"tickets_module_fk\"", "модуль"),
+            ("... violates check constraint \"tickets_id_check\"", "идентификатор"),
+            ("... violates foreign key constraint \"tickets_status_fkey\"", "статус"),
+        ] {
+            let got = explain_constraint(err).unwrap_or_default();
+            assert!(got.contains(want), "для {err} ожидали упоминание {want}, получили {got:?}");
+        }
+    }
+
+    // Неопознанное не выдумывается: лучше прежнее общее сообщение, чем
+    // уверенная неправда о причине.
+    #[test]
+    fn an_unknown_error_is_not_guessed() {
+        assert!(explain_constraint("connection reset by peer").is_none());
     }
 }
