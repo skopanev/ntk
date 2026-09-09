@@ -172,6 +172,13 @@ pub async fn start(
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
+    // Идентификатор приводится к каноническому виду сразу после входа в
+    // воркспейс: дальше все сравнения точные, и ни одно из них не надо помнить.
+    let id = match canonical_id(&tx, &id).await {
+        Some(v) => v,
+        None => return oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+    };
+
     match claim::start(&tx, &id).await {
         Ok(claim::StartOutcome::Taken(c)) => {
             if tx.commit().await.is_err() {
@@ -290,6 +297,13 @@ pub async fn patch(
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
+    // Идентификатор приводится к каноническому виду сразу после входа в
+    // воркспейс: дальше все сравнения точные, и ни одно из них не надо помнить.
+    let id = match canonical_id(&tx, &id).await {
+        Some(v) => v,
+        None => return oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+    };
+
 
     let Ok(Some(row)) = tx.query_opt("select status from tickets where id = $1 and deleted_at is null", &[&id]).await else {
         return oops(StatusCode::NOT_FOUND, "такого тикета нет");
@@ -825,6 +839,13 @@ pub async fn remove(
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
+    // Идентификатор приводится к каноническому виду сразу после входа в
+    // воркспейс: дальше все сравнения точные, и ни одно из них не надо помнить.
+    let id = match canonical_id(&tx, &id).await {
+        Some(v) => v,
+        None => return oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+    };
+
 
     // Кто на нём стоит — говорится вслух до удаления, а не выясняется потом.
     let waiting: Vec<String> = match tx
@@ -1639,6 +1660,27 @@ mod create_wire_tests {
         let r = serde_json::from_str::<Create>(r#"{"workspace":"ws","title":"t","tipe":"x"}"#);
         assert!(r.is_err(), "неизвестное поле обязано отвергаться");
     }
+}
+
+/// Приводит идентификатор к тому виду, в котором он лежит в базе.
+///
+/// Идентификатор набирают руками и копируют из чужих сообщений, поэтому регистр
+/// в нём случаен. `show` и `deps` искали через lower(id) и находили, а правка,
+/// захват и вложения сравнивали точно и отвечали «такого тикета нет» — про
+/// существующий тикет. Одно и то же имя означало разное в зависимости от ручки.
+///
+/// Приведение делается ОДИН раз на входе, а не правкой каждого сравнения:
+/// сравнений десять, и следующее добавят снова точным. Индекс lower(id) есть,
+/// поэтому это не стоит ничего.
+pub(crate) async fn canonical_id(tx: &deadpool_postgres::Transaction<'_>, id: &str) -> Option<String> {
+    tx.query_opt(
+        "select id from tickets where lower(id) = lower($1) and deleted_at is null",
+        &[&id],
+    )
+    .await
+    .ok()
+    .flatten()
+    .map(|r| r.get(0))
 }
 
 /// Переводит нарушенное ограничение в понятное объяснение.

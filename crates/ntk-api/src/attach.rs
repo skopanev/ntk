@@ -84,7 +84,7 @@ pub async fn begin(
     // deleted_at обязателен: убранный тикет не должен принимать вложения.
     // Без этого условия можно было получить ссылку на загрузку к удалённому.
     if tx
-        .query_opt("select 1 from tickets where id = $1 and deleted_at is null", &[&ticket])
+        .query_opt("select 1 from tickets where lower(id) = lower($1) and deleted_at is null", &[&ticket])
         .await
         .ok()
         .flatten()
@@ -161,7 +161,7 @@ pub async fn commit(
     // Тикет мог быть убран между выдачей ссылки и подтверждением: пятнадцать
     // минут — достаточный срок, чтобы это случилось.
     if tx
-        .query_opt("select 1 from tickets where id = $1 and deleted_at is null", &[&ticket])
+        .query_opt("select 1 from tickets where lower(id) = lower($1) and deleted_at is null", &[&ticket])
         .await
         .ok()
         .flatten()
