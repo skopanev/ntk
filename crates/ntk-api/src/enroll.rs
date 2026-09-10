@@ -1,5 +1,5 @@
-//! Маршруты входа: устройство просит код, человек проходит Google, устройство
-//! забирает ключ. Владелец в этом не участвует.
+//! Sign-in routes: the device asks for a code, the person goes through Google,
+//! the device collects the key. The owner takes no part in it.
 
 use std::sync::Arc;
 
@@ -19,11 +19,12 @@ fn oops(code: StatusCode, msg: &str) -> Response {
     (code, Json(json!({ "error": msg }))).into_response()
 }
 
-/// Шаг 1: расширение просит код. Секрет устройства возвращается один раз и
-/// остаётся у него; по нему потом доказывается, что ключ забирает тот же, кто
-/// вход начинал.
-/// Адрес клиента из заголовка, который ставит Caddy. Сервис слушает только
-/// localhost, поэтому иначе все запросы выглядели бы пришедшими с 127.0.0.1.
+/// Step 1: the client asks for a code. The device secret is returned once and
+/// stays with it; it later proves that the key is collected by whoever started
+/// the sign-in.
+/// The client address from the header Caddy sets. The service listens on
+/// localhost only, so otherwise every request would look like it came from
+/// 127.0.0.1.
 pub fn client_ip(h: &HeaderMap) -> String {
     h.get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -40,22 +41,24 @@ pub async fn start(State(app): State<Arc<App>>, headers: HeaderMap) -> Response 
         return oops(StatusCode::SERVICE_UNAVAILABLE, "база недоступна");
     };
 
-    // Просроченные коды не хранятся: они бесполезны, а копятся навсегда.
-    // Уборка здесь, а не по расписанию — таблица маленькая, а лишний
-    // движущийся механизм дороже одного DELETE.
+    // Expired codes are not kept: they are useless and pile up forever.
+    // Cleaned here rather than on a schedule — the table is small, and one
+    // more moving part costs more than a single DELETE.
     let _ = c
         .execute("delete from core.device_codes where expires_at < now() - interval '1 hour'", &[])
         .await;
 
-    // Потолок считается ПО АДРЕСУ, а не на всех сразу.
+    // The cap counts PER ADDRESS, not across everyone at once.
     //
-    // Глобальный потолок был дырой, которую я сам и внёс «для защиты»: двести
-    // первый запрос закрывал вход ВСЕМ на пять минут, то есть один человек с
-    // одной машины гасил логин всей компании. Подтверждено на живом сервере:
-    // 199 успешных, дальше 51 отказ, восстановление по истечении TTL.
+    // A global cap was a hole I introduced myself "for protection": the two
+    // hundred and first request shut sign-in for EVERYONE for five minutes,
+    // so one person on one machine took down logins for the whole company.
+    // Confirmed on the live server: 199 successes, then 51 refusals, recovery
+    // once the TTL expired.
     //
-    // По адресу распределённая попытка остаётся возможной, но это другой класс
-    // и другая цена; главное — один клиент больше не отвечает за всех.
+    // Per address a distributed attempt is still possible, but that is a
+    // different class and a different price; the point is that one client no
+    // longer answers for everybody.
     if let Ok(r) = c
         .query_one(
             "select count(*) from core.device_codes
@@ -99,25 +102,27 @@ pub struct PollBody {
     device_secret: String,
 }
 
-/// Шаг 3: расширение спрашивает «уже?». Ключ отдаётся РОВНО ОДИН РАЗ:
-/// выдача стирается тем же запросом, которым читается.
+/// Step 3: the client asks "ready yet?". The key is handed out EXACTLY ONCE:
+/// it is erased by the very query that reads it.
 pub async fn poll(State(app): State<Arc<App>>, Json(b): Json<PollBody>) -> Response {
     let Ok(c) = app.pool.get().await else {
         return oops(StatusCode::SERVICE_UNAVAILABLE, "база недоступна");
     };
     let code = device::normalize(&b.code);
 
-    // Забор и стирание одной командой, но значение берётся ДО стирания.
+    // Collect and erase in one command, but the value is taken BEFORE the
+    // erase.
     //
-    // Здесь был дефект: `update … set issued_key = null … returning issued_key`
-    // отдаёт значение ПОСЛЕ обновления, то есть уже стёртый null. Ключ
-    // выдавался и терялся в тот же миг, а человек видел «ключ уже был забран».
-    // В проверках путь не выполнялся: до него доходит только настоящий вход
-    // через Google, машиной не проходимый. Нашлось живым пользователем.
+    // There was a defect here: `update … set issued_key = null … returning
+    // issued_key` returns the value AFTER the update, that is the null just
+    // written. The key was issued and lost in the same instant, while the
+    // person saw "the key has already been collected". The path never ran in
+    // the tests: only a real Google sign-in reaches it, and a machine cannot
+    // walk that. A live user found it.
     //
-    // CTE решает обе задачи разом: `taken` читает и запирает строку, `cleared`
-    // стирает её в той же команде, а наружу отдаётся прочитанное. Окна, в
-    // которое ключ достался бы дважды, по-прежнему нет.
+    // A CTE solves both at once: `taken` reads and locks the row, `cleared`
+    // erases it in the same command, and what goes out is what was read. There
+    // is still no window in which the key could be handed out twice.
     let rows = c
         .query(
             "with taken as (
@@ -147,10 +152,11 @@ pub async fn poll(State(app): State<Arc<App>>, Json(b): Json<PollBody>) -> Respo
             }
         }
         Ok(_) => {
-            // Различаем «ещё не вошли» и «просрочено»: первое лечится ожиданием.
-            // «Ещё не вошли» и «ключ уже забрали» — разные ответы. Без проверки
-            // claimed_at забор, случившийся в другом процессе, выглядел бы как
-            // «ждите», и клиент опрашивал бы вечно.
+            // "Not signed in yet" and "expired" are told apart: waiting cures the
+            // first. "Not signed in yet" and "already collected" are different
+            // answers too. Without the claimed_at check, a collection that happened
+            // in another process would look like "keep waiting", and the client
+            // would poll forever.
             let alive = c
                 .query_one(
                     "select count(*) from core.device_codes
@@ -182,8 +188,9 @@ pub struct LinkQuery {
     code: String,
 }
 
-/// Шаг 2: человек открыл ссылку. Отправляем в Google, привязав device-код к
-/// `state` — он же защищает от подстановки чужого ответа.
+/// Step 2: the person opened the link. We send them to Google with the device
+/// code tied to `state` — which also guards against somebody else's answer
+/// being substituted.
 pub async fn link(State(app): State<Arc<App>>, Query(q): Query<LinkQuery>) -> Response {
     let code = device::normalize(&q.code);
     Redirect::to(&oauth::auth_url(
@@ -201,11 +208,11 @@ pub struct CallbackQuery {
     error: Option<String>,
 }
 
-/// Экранирование для HTML.
+/// HTML escaping.
 ///
-/// Без него страница входа была отражённой XSS: `page()` вставляла текст в
-/// разметку через format!, и `/auth/google/callback?error=<script>…` исполнялся
-/// в браузере жертвы. Подтверждено на живом сервере.
+/// Without it the sign-in page was a reflected XSS: `page()` interpolated text
+/// into markup through format!, and `/auth/google/callback?error=<script>…` ran
+/// in the victim's browser. Confirmed on the live server.
 fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -221,7 +228,7 @@ fn esc(s: &str) -> String {
     out
 }
 
-/// То же, что `page`, но доступно другим модулям входа.
+/// The same as `page`, but available to the other sign-in modules.
 pub fn plain_page(title: &str, body: &str) -> Response {
     page(title, body)
 }
@@ -237,13 +244,14 @@ fn page(title: &str, body: &str) -> Response {
     .into_response()
 }
 
-/// Шаг 2б: Google вернул человека. Проверяем токен, применяем правило записи,
-/// выпускаем ключ и привязываем к коду. Человек ключа не видит — его заберёт
-/// расширение.
+/// Step 2b: Google sent the person back. We verify the token, apply the
+/// enrolment rule, issue a key and tie it to the code. The person never sees
+/// the key — the client will collect it.
 pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery>) -> Response {
-    // Тем же адресом возвращается вход Claude Desktop: список разрешённых
-    // адресов живёт в консоли Google, и второй там просто так не появится.
-    // Развод по явной метке, а не по догадке о форме строки.
+    // The Claude Desktop sign-in comes back through the same address: the
+    // list of allowed addresses lives in the Google console, and a second one
+    // does not appear there on its own. Told apart by an explicit marker
+    // rather than by guessing at the shape of a string.
     if q.state.as_deref().is_some_and(|s| s.starts_with(crate::mcp_oauth::STATE_PREFIX)) {
         return crate::mcp_oauth::callback(
             State(app),
@@ -256,9 +264,9 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
         .await;
     }
     if let Some(e) = q.error {
-        // Текст из адресной строки в страницу не попадает вовсе. Экранирование
-        // уже стоит, но отражать чужой ввод незачем: чего не отражаем, тем и
-        // не выстрелят.
+        // Text from the address bar does not reach the page at all. The escaping
+        // is already in place, but there is no reason to reflect somebody's
+        // input: what is never reflected can never be fired.
         tracing::warn!(error = %e, "Google отказал во входе");
         return page("Вход не выполнен", "Google не подтвердил вход. Попробуйте ещё раз.");
     }
@@ -303,16 +311,16 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
             ),
         ),
         Err(e) => {
-            // Печатаем цепочку целиком: «db error» без причины стоил живого
-            // человека, который упёрся и не смог сказать, во что именно.
+            // The whole chain is printed: a bare "db error" with no cause cost us a
+            // real person who got stuck and could not say what on.
             tracing::warn!(error = ?e, email = %ident.email, "самозапись не прошла");
             page("Доступ не разрешён", &format!("{e:#}"))
         }
     }
 }
 
-/// Заводит человека по правилу и привязывает ключ к коду устройства.
-/// Всё одной транзакцией: половина записи хуже, чем отказ целиком.
+/// Enrols a person by rule and ties the key to the device code. All in one
+/// transaction: half a write is worse than a refusal outright.
 async fn enroll(
     client: &mut deadpool_postgres::Client,
     ident: &oauth::Identity,
@@ -342,12 +350,13 @@ async fn enroll(
     Ok(workspaces)
 }
 
-/// Опознанный Google человек → строка в `core.users` и его воркспейсы.
+/// A person Google recognised → a row in `core.users` and their workspaces.
 ///
-/// Вынесено из `enroll`, потому что путей входа стало два: устройство с кодом
-/// и удалённый MCP по OAuth. Второй способ заводить людей неминуемо разошёлся
-/// бы с первым — в правилах записи, в проверке чужой карточки или в том, как
-/// выводится идентификатор, — и разошёлся бы тихо.
+/// Pulled out of `enroll` because there are now two sign-in paths: a device
+/// with a code, and remote MCP over OAuth. A second way of enrolling people
+/// would inevitably have drifted from the first — in the enrolment rules, in
+/// the check against somebody else's record, or in how the identifier is
+/// derived — and it would have drifted quietly.
 pub async fn provision(
     tx: &deadpool_postgres::Transaction<'_>,
     ident: &oauth::Identity,
@@ -373,19 +382,21 @@ pub async fn provision(
     let workspaces: Vec<String> = rule.get(0);
     let role: String = rule.get(1);
 
-    // Идентификатор человека — часть адреса до @. Читаемо в тикетах и совпадает
-    // с тем, как люди называют друг друга.
+    // A person's identifier is the part of the address before the @. Readable
+    // in tickets and matching how people address each other.
     let user_id = email.split('@').next().unwrap_or(&email).to_string();
 
-    // Карточка принадлежит адресу, а не совпадению инициалов.
+    // A record belongs to an address, not to matching initials.
     //
-    // Идентификатор выводится из части адреса до @, а карточки заведены
-    // заранее по инициалам из Notion. Без этой проверки ar@чужая-компания.com
-    // получил бы карточку Александра Русских и 757 его тикетов — молча, без
-    // ошибки. Инициалы совпадают легко: это вопрос времени, а не вероятности.
+    // The identifier is derived from the part of the address before the @,
+    // while the records were created in advance from initials carried over
+    // from the old system. Without this check, ar@some-other-company.com would
+    // get another person's record and their 757 tickets — silently, with no
+    // error. Initials collide easily: a question of time, not of probability.
     //
-    // Ничейная карточка (заведена администратором, адреса нет) присваивается
-    // первым входом. Карточка с адресом пускает только своего владельца.
+    // An unowned record (created by an administrator, no address on it) is
+    // claimed by the first sign-in. A record with an address admits only its
+    // owner.
     match tx
         .query_opt("select email from core.users where id = $1", &[&user_id])
         .await?
@@ -404,8 +415,9 @@ pub async fn provision(
                 "идентификатор {user_id} уже принадлежит {known}. \
                  Совпали инициалы — обратитесь к администратору, он разведёт учётные записи"
             ),
-            // Ничейная: присваиваем. Отсюда же берётся право update(email),
-            // и оно нарочно узкое — ничего другого API в карточке не меняет.
+            // Unowned: claim it. This is where the update(email) right comes
+            // from, and it is deliberately narrow — the API changes nothing else
+            // on the record.
             None => {
                 tx.execute("update core.users set email = $2 where id = $1", &[&user_id, &email])
                     .await?;
@@ -413,13 +425,14 @@ pub async fn provision(
         },
     }
 
-    // Доступ к воркспейсам — то, ради чего правило вообще читалось.
+    // Workspace access — the whole reason the rule was read at all.
     //
-    // Раньше `workspaces` из правила только возвращались наружу, а строк в
-    // core.user_workspaces не появлялось. Человек проходил Google, получал
-    // ключ, страница говорила «Доступ: acme» — и `ntk whoami` отвечал
-    // «воркспейсов нет». Отказ выглядел как забывчивость администратора,
-    // хотя администратор был ни при чём. Проверено на живом человеке.
+    // `workspaces` from the rule used to be returned outward and nothing
+    // else; no rows appeared in core.user_workspaces. A person went through
+    // Google, got a key, the page said "Access: acme" — and `ntk whoami`
+    // answered "no workspaces". The refusal looked like an administrator's
+    // forgetfulness, though the administrator had nothing to do with it.
+    // Found on a real person.
     for ws in &workspaces {
         tx.execute(
             "insert into core.user_workspaces (user_id, workspace) values ($1, $2)

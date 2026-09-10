@@ -1,16 +1,19 @@
-//! OAuth 2.1 для удалённого MCP: Claude Desktop подключается по одной ссылке.
+//! OAuth 2.1 for remote MCP: Claude Desktop connects through a single link.
 //!
-//! Мы здесь и защищаемый ресурс, и сервер авторизации. Личность по-прежнему
-//! подтверждает Google — своих паролей у нас нет и не будет; мы лишь выдаём
-//! токен на уже опознанного человека и заводим его тем же кодом, что и вход с
-//! устройства (`enroll::provision`).
+//! We are both the protected resource and the authorisation server here. The
+//! identity is still confirmed by Google — we have no passwords of our own and
+//! never will; we merely issue a token for an already-identified person and
+//! enrol them through the same code as the device sign-in
+//! (`enroll::provision`).
 //!
-//! Обязательное по спецификации, а не по вкусу:
-//! * метаданные защищаемого ресурса (RFC 9728) и сервера авторизации (RFC 8414);
-//! * саморегистрация клиента (RFC 7591) — заранее мы Claude Desktop не знаем;
-//! * PKCE — без него перехваченный код обменивает кто угодно;
-//! * `resource` (RFC 8707) — токен привязан к тому, для кого выпущен;
-//! * `WWW-Authenticate` на 401, иначе клиенту неоткуда узнать, куда идти.
+//! Required by the specification rather than by taste:
+//! * protected-resource (RFC 9728) and authorisation-server (RFC 8414) metadata;
+//! * dynamic client registration (RFC 7591) — we do not know Claude Desktop in
+//!   advance;
+//! * PKCE — without it anyone who intercepts a code can exchange it;
+//! * `resource` (RFC 8707) — the token is bound to whoever it was issued for;
+//! * `WWW-Authenticate` on a 401, or the client has no way of learning where to
+//!   go.
 
 use std::sync::Arc;
 
@@ -27,7 +30,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{enroll, oauth, App};
 
-/// Путь MCP-точки. Он же — канонический идентификатор ресурса в токене.
+/// The MCP endpoint path. Also the canonical resource identifier in the token.
 pub const MCP_PATH: &str = "/mcp-claude";
 
 pub fn resource_url(base: &str) -> String {
@@ -40,16 +43,17 @@ fn rnd(n: usize) -> String {
     (0..n).map(|_| A[r.gen_range(0..A.len())] as char).collect()
 }
 
-/// Метка состояния входа Claude. Возврат из Google общий с входом устройства,
-/// и различать их надо явно, а не по длине или форме строки.
+/// The marker on the Claude sign-in state. The Google callback is shared with
+/// the device sign-in, and the two must be told apart explicitly rather than by
+/// the length or shape of a string.
 pub const STATE_PREFIX: &str = "ntkos.";
 
 pub fn hash(s: &str) -> String {
     hex::encode(Sha256::digest(s.as_bytes()))
 }
 
-/// Метаданные защищаемого ресурса. Клиент приходит сюда после 401 и узнаёт,
-/// какой сервер авторизации спрашивать.
+/// Protected-resource metadata. The client comes here after a 401 and learns
+/// which authorisation server to ask.
 pub async fn protected_resource(State(app): State<Arc<App>>) -> Response {
     let base = app.cfg.public_url.trim_end_matches('/');
     Json(json!({
@@ -61,7 +65,7 @@ pub async fn protected_resource(State(app): State<Arc<App>>) -> Response {
     .into_response()
 }
 
-/// Метаданные сервера авторизации (RFC 8414).
+/// Authorisation-server metadata (RFC 8414).
 pub async fn authorization_server(State(app): State<Arc<App>>) -> Response {
     let base = app.cfg.public_url.trim_end_matches('/');
     Json(json!({
@@ -73,7 +77,7 @@ pub async fn authorization_server(State(app): State<Arc<App>>) -> Response {
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
-        // Только S256: «plain» сводит PKCE к украшению.
+        // S256 only: "plain" reduces PKCE to decoration.
         "code_challenge_methods_supported": ["S256"]
     }))
     .into_response()
@@ -85,11 +89,12 @@ pub struct Registration {
     redirect_uris: Vec<String>,
 }
 
-/// Саморегистрация клиента (RFC 7591).
+/// Dynamic client registration (RFC 7591).
 ///
-/// Открыта всему интернету — так задумано спецификацией, и это не дыра:
-/// зарегистрированный клиент ничего не может, пока живой человек не пройдёт
-/// Google. Записываем, кто регистрировался, чтобы было что разбирать.
+/// Open to the whole internet — that is how the specification intends it, and
+/// it is not a hole: a registered client can do nothing until a live person
+/// goes through Google. We record who registered so there is something to look
+/// at afterwards.
 pub async fn register(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -98,8 +103,8 @@ pub async fn register(
     if r.redirect_uris.is_empty() {
         return bad("invalid_redirect_uri", "не указан ни один redirect_uri");
     }
-    // Открытое перенаправление — способ увести код авторизации. Пускаем только
-    // https и localhost, как требует спецификация.
+    // An open redirect is a way to walk off with an authorisation code. Only
+    // https and localhost are allowed, as the specification requires.
     for u in &r.redirect_uris {
         let ok = u.starts_with("https://")
             || u.starts_with("http://localhost")
@@ -158,7 +163,7 @@ pub struct AuthorizeQuery {
     resource: Option<String>,
 }
 
-/// Шаг 1: клиент прислал человека. Проверяем клиента и уводим человека в Google.
+/// Step 1: the client sent a person. We check the client and hand the person to Google.
 pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQuery>) -> Response {
     if q.response_type != "code" {
         return bad("unsupported_response_type", "поддерживается только code");
@@ -173,8 +178,8 @@ pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQue
     let Ok(c) = app.pool.get().await else {
         return bad("temporarily_unavailable", "база недоступна");
     };
-    // Точное совпадение redirect_uri, а не префикс: префикс — это открытое
-    // перенаправление с лишним шагом.
+    // An exact redirect_uri match, not a prefix: a prefix is an open redirect
+    // with one extra step.
     let known = c
         .query_opt(
             "select 1 from core.oauth_clients where client_id = $1 and $2 = any(redirect_uris)",
@@ -204,9 +209,9 @@ pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQue
         return bad("server_error", "внутренняя ошибка");
     }
 
-    // Возврат из Google — отдельный адрес: у входа с устройства состояние это
-    // код устройства, и разбирать два разных смысла в одном обработчике значит
-    // однажды перепутать их.
+    // The Google callback is a separate address: for the device sign-in the
+    // state IS the device code, and parsing two different meanings in one
+    // handler means confusing them one day.
     Redirect::to(&oauth::auth_url(
         &app.cfg.google_client_id,
         &app.cfg.oauth_redirect_uri(),
@@ -222,7 +227,7 @@ pub struct CallbackQuery {
     pub error: Option<String>,
 }
 
-/// Шаг 2: Google вернул человека. Опознаём, заводим и выдаём код клиенту.
+/// Step 2: Google sent the person back. We identify, enrol and issue a code.
 pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery>) -> Response {
     if q.error.is_some() {
         return crate::enroll::plain_page("Вход не выполнен", "Google не подтвердил вход.");
@@ -234,8 +239,8 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     let Ok(mut c) = app.pool.get().await else {
         return crate::enroll::plain_page("Временная неполадка", "База недоступна, попробуйте позже.");
     };
-    // Состояние забирается ровно один раз: строка удаляется тем же запросом,
-    // которым читается. Иначе один возврат из Google обменивается дважды.
+    // The state is collected exactly once: the row is deleted by the same
+    // query that reads it. Otherwise one Google callback is exchanged twice.
     let row = c
         .query_opt(
             "delete from core.oauth_states where state = $1 and expires_at > now()
@@ -307,7 +312,7 @@ pub struct TokenForm {
     refresh_token: Option<String>,
 }
 
-/// Шаг 3: обмен кода на токен. Код одноразовый, проверка PKCE обязательна.
+/// Step 3: exchanging the code for a token. The code is one-shot and the PKCE check is mandatory.
 pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Response {
     let Ok(mut c) = app.pool.get().await else {
         return bad("temporarily_unavailable", "база недоступна");
@@ -318,8 +323,9 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
             let (Some(code), Some(verifier)) = (f.code.as_ref(), f.code_verifier.as_ref()) else {
                 return bad("invalid_request", "нужны code и code_verifier");
             };
-            // Код гасится тем же запросом, которым читается: между «прочитал» и
-            // «пометил использованным» окна нет, поэтому второй обмен не пройдёт.
+            // The code is burnt by the same query that reads it: there is no
+            // window between "read" and "marked used", so a second exchange
+            // cannot go through.
             let row = c
                 .query_opt(
                     "update core.oauth_codes set used_at = now()
@@ -339,7 +345,7 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
             if f.redirect_uri.as_deref() != Some(redir.as_str()) {
                 return bad("invalid_grant", "redirect_uri не совпадает с тем, для которого выдан код");
             }
-            // S256: base64url(sha256(verifier)) без выравнивания.
+            // S256: base64url(sha256(verifier)) without padding.
             let expect = base64_url(&Sha256::digest(verifier.as_bytes()));
             if expect != challenge {
                 return bad("invalid_grant", "проверка PKCE не прошла");
@@ -407,8 +413,9 @@ fn base64_url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Токен → личность. Проверяется и срок, и то, что токен выпущен ДЛЯ НАС:
-/// принимать чужой токен значит доверять чужому серверу авторизации.
+/// Token → identity. Both the expiry and the fact that the token was issued FOR
+/// US are checked: accepting somebody else's token means trusting somebody
+/// else's authorisation server.
 pub async fn actor_from_token(
     c: &deadpool_postgres::Client,
     token: &str,
@@ -435,8 +442,9 @@ pub async fn actor_from_token(
     }))
 }
 
-/// 401 по спецификации: без этого заголовка клиенту неоткуда узнать, где
-/// спрашивать разрешение, и он покажет человеку голое «не авторизовано».
+/// A 401 by the book: without this header the client has no way of learning
+/// where to ask for permission, and will show the person a bare
+/// "unauthorised".
 pub fn unauthorized(base: &str, detail: &str) -> Response {
     let meta = format!("{}/.well-known/oauth-protected-resource", base.trim_end_matches('/'));
     (

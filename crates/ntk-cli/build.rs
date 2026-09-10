@@ -1,5 +1,5 @@
-// Платформа вшивается на компиляции: спрашивать её у операционной системы в
-// рантайме — значит однажды спросить не то. Здесь она известна точно.
+// The platform is baked in at compile time: asking the operating system at
+// runtime means asking the wrong thing one day. Here it is known exactly.
 fn main() {
     let os = match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("macos") => "darwin",

@@ -1,7 +1,7 @@
-//! Конфиг клиента: адрес сервиса и ключ на каждый воркспейс.
+//! Client config: service address and key.
 //!
-//! Понятия «воркспейс по умолчанию» здесь нет намеренно. Раньше забытый `-W`
-//! молча уводил запись в чужой воркспейс; теперь это отказ с объяснением.
+//! There is deliberately no "default workspace". A forgotten `-W` used to send
+//! a write quietly into someone else's workspace; now it is a refusal.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -11,17 +11,15 @@ use std::path::PathBuf;
 pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
-    /// Один ключ на пользователя: область доступа хранится на сервере, а не
-    /// в ключе, поэтому одного достаточно на все свои воркспейсы.
+    /// One key per person: the scope lives on the server, not in the key, so
+    /// one covers every workspace you have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
 }
 
-// Поле `rest` здесь было ради JS-клиента: тот же файл держал `workspaces` с
-// токенами Notion, и без сохранения чужих ключей первый же `ntk login` оставил
-// бы флот без доступа. JS-клиента больше нет, Notion тоже. Побочно это и
-// уборка: при следующей записи конфига протухшие токены Notion уходят с диска,
-// а не лежат там годами.
+// A `rest` field lived here for the old JS client, which kept third-party
+// tokens in the same file. Both are gone, so the field is too — and the next
+// config write sweeps those stale tokens off the disk.
 
 fn default_url() -> String {
     "https://ntk.example.com".into()
@@ -47,7 +45,7 @@ pub fn save(cfg: &Config) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(&p, serde_json::to_string_pretty(cfg)?)?;
-    // Ключ — секрет: файл не должен быть читаем всей машиной.
+    // The key is a secret: the file must not be world-readable.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -59,17 +57,15 @@ pub fn save(cfg: &Config) -> Result<()> {
 pub fn require_key(cfg: &Config) -> Result<&str> {
     match cfg.key.as_deref() {
         Some(k) if !k.is_empty() => Ok(k),
-        _ => bail!("нет ключа — выполните: ntk login"),
+        _ => bail!("no key — run: ntk login"),
     }
 }
 
-/// Воркспейс берётся из `.ntkrc` рядом или из `-W`. Догадок нет.
-/// Воркспейс из `.ntkrc` ближайшего каталога вверх по дереву.
+/// The workspace comes from the nearest `.ntkrc` up the tree, or from `-W`.
 ///
-/// `.ntkrc` — это JSON: `{"v":2,"workspace":"…","project":"…"}`. Первая версия
-/// разбирала его как `ключ = значение` и не находила ничего вообще: любая
-/// команда в репозитории отвечала «не указан воркспейс», хотя он там был
-/// записан. Проверять надо было на настоящем файле, а не на придуманном.
+/// `.ntkrc` is JSON: `{"v":2,"workspace":"…","project":"…"}`. The first version
+/// parsed it as `key = value` and found nothing: every command answered "no
+/// workspace given" while it was written right there. Test against a real file.
 pub fn workspace_from_rc() -> Option<String> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
@@ -91,7 +87,7 @@ pub fn workspace_from_rc() -> Option<String> {
     }
 }
 
-/// Проект из `.ntkrc` — тем же способом и по той же причине.
+/// The project from `.ntkrc` — same way, same reason.
 pub fn project_from_rc() -> Option<String> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
@@ -138,22 +134,17 @@ mod tests {
 
     #[test]
     fn an_old_config_reads_and_loses_the_notion_leftovers() {
-        // Форма рабочего конфига JS-версии: воркспейсы с токенами Notion.
+        // A working config from the JS version, third-party tokens and all.
         //
-        // Раньше этот тест требовал ОБРАТНОГО — чтобы запись сохраняла чужие
-        // поля, потому что тем же файлом владел работающий JS-клиент. Гарантия
-        // снята сознательно вместе с полем rest (коммит «Notion уходит из
-        // дерева»): JS-клиента больше нет, и уборка протухших токенов Notion с
-        // чужих машин — не побочный ущерб, а смысл.
-        //
-        // Тест переписан, а не удалён: без него ничто не закрепляет, что старый
-        // конфиг всё ещё ЧИТАЕТСЯ без ошибки. Прочитать и не упасть — важно;
-        // сохранять чужое — больше нет.
+        // This test used to demand the OPPOSITE: that a write preserve foreign
+        // fields, because a live JS client owned the same file. Dropped on
+        // purpose along with the rest field. Rewritten rather than deleted —
+        // otherwise nothing pins down that an old config still READS.
         let raw = r#"{
             "default_workspace": "default",
             "workspaces": { "ftk": { "token": "ntn_secret", "database_id": "db" } }
         }"#;
-        let cfg: Config = serde_json::from_str(raw).expect("старый конфиг обязан читаться");
+        let cfg: Config = serde_json::from_str(raw).expect("an old config must still read");
         assert!(cfg.key.is_none());
         assert_eq!(cfg.url, default_url());
 

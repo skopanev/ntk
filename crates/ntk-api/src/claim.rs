@@ -1,9 +1,10 @@
-//! Захват тикета — то, ради чего затевался переезд.
+//! Claiming a ticket — the thing the whole migration was for.
 //!
-//! В Notion между чтением статуса и записью было окно: два агента видели один
-//! `open` и оба писали `in_progress`. Условной записи Notion не давал, обойти
-//! это было нечем. Здесь захват атомарен, и механизма два, потому что задачи
-//! разные.
+//! In the previous system there was a window between reading the status and
+//! writing it: two agents saw the same `open` and both wrote `in_progress`. It
+//! offered no conditional write, and there was nothing to work around it with.
+//! Here the claim is atomic, and there are two mechanisms because the jobs
+//! differ.
 
 use tokio_postgres::Transaction;
 
@@ -13,32 +14,32 @@ pub struct Claimed {
     pub status: String,
 }
 
-/// `next` — взять любой свободный, при желании предпочитая теги.
+/// `next` — take any free ticket, optionally preferring tags.
 ///
-/// ВАЖНО: захват НЕ трогает `assignee`. Это поле отвечает на вопрос «кто
-/// отвечает за тикет», а не «кто его сейчас держит»; переписывать его при
-/// взятии в работу означало бы молча стирать ответственного. Взятие меняет
-/// только статус — переход в `in_progress` и есть факт взятия.
+/// IMPORTANT: claiming does NOT touch `assignee`. That field answers "who is
+/// responsible for this ticket", not "who is holding it right now"; rewriting
+/// it on claim would silently erase the responsible person. A claim changes
+/// only the status — the move to `in_progress` IS the claim.
 ///
-/// `FOR UPDATE SKIP LOCKED`: параллельные агенты разбирают очередь, не
-/// блокируя друг друга. Тот, кому строка досталась, работает; остальные видят
-/// следующую, а не ждут.
+/// `FOR UPDATE SKIP LOCKED`: parallel agents work through the queue without
+/// blocking each other. Whoever got the row works on it; the others see the
+/// next one instead of waiting.
 ///
-/// `prefer` задаёт порядок предпочтения: `["infra","alpha"]` означает
-/// «сначала всё из infra, потом alpha, потом остальное». Не фильтр, а
-/// порядок — иначе агент простаивал бы при пустой полосе вместо того, чтобы
-/// взять следующее по важности.
+/// `prefer` sets an order of preference: `["infra","alpha"]` means "everything
+/// from infra first, then alpha, then the rest". An order, not a filter —
+/// otherwise an agent would idle on an empty lane instead of taking the next
+/// most important thing.
 ///
-/// Срочность поднимается по ребру зависимости. Тикет, который держит начатую
-/// работу, срочен ровно настолько, насколько срочно то, что он держит: иначе
-/// флот разбирает посторонний бэклог, пока начатое стоит. Считается это
-/// замыканием вниз по `deps` от всего, что в группе `in_progress`, а не одним
-/// шагом: непосредственный блокер сам может быть заблокирован, и тогда
-/// кандидатом окажется блокер блокера, до которого один шаг не достаёт.
+/// Urgency travels up the dependency edge. A ticket holding started work is
+/// exactly as urgent as the thing it holds: otherwise the fleet works through
+/// unrelated backlog while started work stands still. It is computed as a
+/// closure down `deps` from everything in the `in_progress` group, not as a
+/// single step: the immediate blocker may itself be blocked, and then the
+/// candidate is the blocker's blocker, which one step does not reach.
 ///
-/// Шкалу приоритетов подъём не переворачивает: `high` из бэклога по-прежнему
-/// обгоняет `low`-блокер начатого `low`, потому что сравниваются ранги, а не
-/// признак «разблокирует». Признак работает тай-брейком среди равных.
+/// The lift does not invert the priority scale: a `high` from the backlog still
+/// beats a `low` blocker of a started `low`, because ranks are compared, not
+/// the "unblocks something" flag. That flag breaks ties among equals.
 const CTES: &str = r#"with recursive
                -- Начатое — это ГРУППА, а не статус с таким именем: в группе
                -- in_progress лежат и `in_progress`, и `to_test`. По литералу
@@ -73,9 +74,9 @@ const CTES: &str = r#"with recursive
                )
 "#;
 
-/// Общая часть отбора: откуда и что считается пригодным. Одна на обе формы —
-/// захват и предпросмотр обязаны выбирать ОДИН и тот же тикет, иначе dry-run
-/// показывал бы не то, что возьмётся.
+/// The shared part of the selection: where from and what counts as eligible.
+/// One for both forms — the claim and the preview must pick THE SAME ticket, or
+/// a dry run would show something other than what gets taken.
 const BODY: &str = r#"
                       join statuses s on s.name = c.status
                       left join needed n on n.id = c.id
@@ -132,7 +133,7 @@ const ORDER: &str = r#"
                                   where o.tag = any(c.tags)), 2147483647),
                        c.created_at"#;
 
-/// Хвост захвата: блокировка строки и возврат взятого.
+/// The tail of the claim: locking the row and returning what was taken.
 const CLAIM_TAIL: &str = r#"
                      limit 1
                        -- OF c обязательно: без него FOR UPDATE запирает строки
@@ -145,37 +146,40 @@ const CLAIM_TAIL: &str = r#"
                        for update of c skip locked)
           returning t.id, t.title, t.status"#;
 
-/// Отборы для захвата. Отдельно от `prefer` намеренно: prefer задаёт ПОРЯДОК
-/// и ничего не отсекает, отбор — ИСКЛЮЧАЕТ. Слить их в одно значило бы потерять
-/// «сначала инфраструктуру, а если её нет — дай что угодно».
+/// Filters for the claim. Deliberately separate from `prefer`: prefer sets an
+/// ORDER and excludes nothing, a filter EXCLUDES. Merging them would lose
+/// "infrastructure first, and if there is none, give me anything".
 ///
-/// Статуса здесь нет и не будет: next берёт только `open` и только с закрытыми
-/// зависимостями. Дать сюда произвольный статус — разрешить захват начатого или
-/// заблокированного, то есть ровно то, от чего гард и стоит.
+/// There is no status here and there will not be: next takes only `open` and
+/// only with closed dependencies. Allowing an arbitrary status would permit
+/// claiming something started or blocked — precisely what the guard exists
+/// for.
 #[derive(Default)]
 pub struct Pick {
     pub tags: Vec<String>,
-    /// Тег должен совпасть целиком, а не войти частью.
+    /// The tag must match in full rather than as a part.
     pub strict: bool,
     pub project: Option<String>,
     pub module: Option<String>,
-    /// Любой действующий модуль вместо конкретного имени.
+    /// Any live module instead of a named one.
     ///
-    /// Диспетчеру нужно «у тикета вообще назначена единица работы», а не
-    /// перечисление двухсот имён. Архивный не считается: работа по нему больше
-    /// не ведётся, и выдавать такой тикет исполнителю незачем.
+    /// A dispatcher needs "the ticket has a unit of work assigned at all",
+    /// not a list of two hundred names. An archived module does not count: work
+    /// on it has stopped, and there is no point handing such a ticket out.
     pub has_module: bool,
     pub assignee: Option<String>,
-    /// Показать, что БЫ взялось, ничего не забирая.
+    /// Show what WOULD be taken without taking anything.
     ///
-    /// Отбор и порядок те же, тикет тот же — разница только в том, что записи
-    /// нет. Нужен диспетчеру, который проверяет свою выборку, и проверяющему,
-    /// который не должен ради одного взгляда уводить тикет у флота.
+    /// Same filter, same order, same ticket — the only difference is that
+    /// nothing is written. Needed by a dispatcher checking its own selection,
+    /// and by a reviewer who should not steal a ticket from the fleet just to
+    /// look at it.
     ///
-    /// Ответ здесь СОВЕТ, а не бронь: двое подряд увидят один и тот же тикет,
-    /// и к моменту захвата его может уже не быть. Поэтому строка не запирается
-    /// (`for update` тут был бы вреден: он держал бы чужие захваты), а клиент
-    /// говорит вслух, что тикет не взят.
+    /// The answer here is ADVICE, not a reservation: two callers in a row will
+    /// see the same ticket, and by the time it is claimed it may be gone. So
+    /// the row is not locked (`for update` would be harmful here: it would hold
+    /// up other people's claims), and the client says out loud that the ticket
+    /// was not taken.
     pub dry_run: bool,
 }
 
@@ -210,11 +214,11 @@ pub async fn next(
     if !f.tags.is_empty() {
         if f.strict {
             args.push(&f.tags);
-            // Массив и `@>` берут GIN-индекс; `= any(...)` уходит в скан.
+            // An array with `@>` takes the GIN index; `= any(...)` goes to a scan.
             cond.push_str(&format!(" and c.tags @> ${}::text[]", args.len()));
         } else {
-            // Каждый названный тег обязан войти хотя бы в один тег тикета:
-            // «и» между названными, вхождение внутри каждого — как в списке.
+            // Every named tag must occur in at least one of the ticket's tags:
+            // AND between the named ones, substring within each — as in the list.
             for t in &f.tags {
                 args.push(t);
                 cond.push_str(&format!(
@@ -225,9 +229,10 @@ pub async fn next(
         }
     }
 
-    // Обе формы собираются из ОДНИХ И ТЕХ ЖЕ частей: отбор и порядок общие,
-    // расходятся только начало и хвост. Иначе предпросмотр однажды показал бы
-    // не тот тикет, который возьмётся, и доверять ему было бы нельзя.
+    // Both forms are assembled from THE SAME parts: the filter and the order
+    // are shared, only the head and the tail differ. Otherwise the preview
+    // would one day show a different ticket from the one that gets taken, and
+    // it could not be trusted.
     let sql = if f.dry_run {
         format!("{CTES} select c.id, c.title, c.status from tickets c {BODY}{cond}{ORDER}\n limit 1")
     } else {
@@ -247,25 +252,26 @@ pub async fn next(
 }
 
 
-/// `start <id>` — взять КОНКРЕТНЫЙ тикет.
+/// `start <id>` — take a NAMED ticket.
 ///
-/// Здесь `SKIP LOCKED` не подходит: пропустить занятую строку означало бы
-/// «тикета нет», а правда в том, что он есть и уже занят. Условная запись
-/// возвращает ноль строк, и это ровно то, что нужно сказать наружу.
+/// `SKIP LOCKED` does not fit here: skipping a locked row would mean "no such
+/// ticket", whereas the truth is that it exists and is already taken. A
+/// conditional write returns zero rows, and that is exactly what needs saying
+/// out loud.
 pub enum StartOutcome {
     Taken(Claimed),
     AlreadyTaken { status: String, agent: Option<String> },
     NoSuchTicket,
-    /// Тикет стоит на незакрытых. Обхода нет намеренно: заблокирован — значит
-    /// заблокирован, иначе флаг «сделать всё равно» становится привычкой и
-    /// зависимости перестают что-либо значить.
+    /// The ticket stands on unclosed ones. There is deliberately no override:
+    /// blocked means blocked, otherwise a "do it anyway" flag becomes a habit
+    /// and dependencies stop meaning anything.
     Blocked { deps: Vec<(String, String)> },
 }
 
 pub async fn start(tx: &Transaction<'_>, id: &str) -> anyhow::Result<StartOutcome> {
-    // Сначала зависимости, потом захват. Порядок именно такой: захватить и
-    // откатить значит на мгновение показать тикет взятым, а соседний агент за
-    // это время увидит его занятым и уйдёт ни с чем.
+    // Dependencies first, then the claim. The order matters: claiming and
+    // rolling back shows the ticket as taken for a moment, and a neighbouring
+    // agent will see it occupied in that window and leave empty-handed.
     let blockers = tx
         .query(
             "select dep.id, dep.status from deps d
@@ -299,8 +305,9 @@ pub async fn start(tx: &Transaction<'_>, id: &str) -> anyhow::Result<StartOutcom
             status: r.get(2),
         }));
     }
-    // Ноль строк значит две разные вещи, и путать их нельзя: «нет тикета» и
-    // «уже взят» требуют от вызывающего разного поведения.
+    // Zero rows means two different things, and they must not be conflated:
+    // "no such ticket" and "already taken" call for different behaviour from
+    // the caller.
     match tx
         .query_opt("select status, assignee from tickets where id = $1 and deleted_at is null", &[&id])
         .await?
@@ -313,9 +320,9 @@ pub async fn start(tx: &Transaction<'_>, id: &str) -> anyhow::Result<StartOutcom
     }
 }
 
-/// Гард «тикет уже подобран»: править свободно можно только то, что в группе
-/// `todo`. Политика лежит в таблице, а не в коде — владелец меняет поведение
-/// одним UPDATE, без релиза.
+/// The "already picked up" guard: only what is in the `todo` group may be
+/// edited freely. The policy lives in a table rather than in code — the owner
+/// changes the behaviour with one UPDATE, without a release.
 pub async fn requires_force(tx: &Transaction<'_>, status: &str) -> anyhow::Result<bool> {
     Ok(tx
         .query_opt(
@@ -333,8 +340,8 @@ pub async fn requires_force(tx: &Transaction<'_>, status: &str) -> anyhow::Resul
 mod pick_tests {
     use super::Pick;
 
-    // Пустой отбор не должен добавлять к запросу ни одного условия: иначе
-    // `ntk next` без флагов начал бы отсекать то, что раньше выдавал.
+    // An empty filter must add no conditions at all: otherwise `ntk next` with
+    // no flags would start excluding what it used to hand out.
     #[test]
     fn an_empty_pick_narrows_nothing() {
         let p = Pick::default();
@@ -343,13 +350,13 @@ mod pick_tests {
         assert!(p.project.is_none() && p.module.is_none() && p.assignee.is_none());
     }
 
-    // Разница, ради которой отбор заведён отдельно от prefer: prefer задаёт
-    // порядок и ничего не отсекает, отбор исключает. Слить их — потерять
-    // «сначала инфраструктуру, а если её нет, дай что угодно».
+    // The difference the filter exists separately from prefer for: prefer sets
+    // an order and excludes nothing, a filter excludes. Merging them loses
+    // "infrastructure first, and if there is none, give me anything".
     #[test]
     fn a_pick_is_not_a_preference() {
         let p = Pick { tags: vec!["infra".into()], ..Default::default() };
         assert_eq!(p.tags, vec!["infra".to_string()]);
-        // prefer в Pick нет и быть не должно — он приходит отдельным аргументом.
+        // prefer is not in Pick and must not be — it arrives as its own argument.
     }
 }

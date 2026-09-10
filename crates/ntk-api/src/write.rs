@@ -310,17 +310,22 @@ pub async fn patch(
     };
     let current: String = row.get(0);
 
-    // Закрытие не требует force, и это не послабление гарда, а его смысл.
+    // Moving work forward does not need force, and that is the point of the
+    // guard rather than a hole in it.
     //
-    // Гард стоит затем, чтобы не править ЧУЖУЮ работу в полёте. Но довести
-    // начатое до конца — не правка, а завершение: обычный путь работы, который
-    // проходит каждый тикет. Требовать здесь force значило заставлять ставить
-    // его рутинно, а от рутины флаг «сделать всё равно» перестаёт что-либо
-    // значить — ровно то, от чего мы страхуемся везде.
+    // The guard exists so nobody edits SOMEONE ELSE'S work mid-flight. But
+    // carrying your own started work to the next stage is not an edit — it is
+    // the ordinary path every ticket takes. Demanding force here would mean
+    // setting it out of routine, and a routine "do it anyway" flag stops
+    // meaning anything.
     //
-    // Исключение УЗКОЕ: только когда меняется единственное поле — статус, и
-    // только когда целевой статус в терминальной группе. Закрыть, попутно
-    // переписав чужое тело или сняв исполнителя, по-прежнему нельзя без force.
+    // The exemption is NARROW: only when the status is the single field
+    // changing, and only for statuses marked `free_target`. Closing while also
+    // rewriting someone else's body still needs force.
+    //
+    // Which statuses those are is DATA, not code (see sql/027): the owner adds
+    // one with an UPDATE. It used to be a hardcoded check for the terminal
+    // group, and `to_test` therefore demanded force to hand work to a tester.
     let only_status = p.status.is_some()
         && p.title.is_none()
         && p.body.is_none()
@@ -334,11 +339,11 @@ pub async fn patch(
         && p.project.is_none()
         && p.due.is_none()
         && p.module.is_none();
-    let closing = only_status
+    let moving_on = only_status
         && match p.status.as_deref() {
             Some(target) => tx
                 .query_opt(
-                    "select 1 from statuses where name = $1 and grp = 'complete'",
+                    "select 1 from statuses where name = $1 and free_target",
                     &[&target],
                 )
                 .await
@@ -348,7 +353,7 @@ pub async fn patch(
             None => false,
         };
 
-    if !p.force && !closing {
+    if !p.force && !moving_on {
         match claim::requires_force(&tx, &current).await {
             Ok(true) => {
                 return (
@@ -746,6 +751,7 @@ pub async fn similar(
             "поиск похожих недоступен: у сервиса нет ключа на векторизацию",
         );
     };
+    let mut policy_min = crate::vector::NEAR_DUPLICATE;
 
     // Текст: либо присланный, либо взятый у существующего тикета.
     let (title, body, exclude) = if let Some(id) = p.id.as_deref() {
@@ -762,7 +768,7 @@ pub async fn similar(
         let enabled = match vector_enabled(&tx).await {
             Ok(e) => e,
             Err(e) => {
-                tracing::error!(error = %e, workspace = %ws, "политика векторизации не прочиталась");
+                tracing::error!(error = %e, workspace = %ws, "vector policy did not read");
                 return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
             }
         };
@@ -772,6 +778,7 @@ pub async fn similar(
                 "в этом воркспейсе векторизация выключена: искать не по чему",
             );
         }
+        policy_min = vector_stop_policy(&tx).await.map(|(_, m)| m).unwrap_or(policy_min);
         let canonical = match canonical_id(&tx, id).await {
             Some(c) => c,
             None => return oops(StatusCode::NOT_FOUND, "тикета нет"),
@@ -799,10 +806,11 @@ pub async fn similar(
         let enabled = match vector_enabled(&tx).await {
             Ok(e) => e,
             Err(e) => {
-                tracing::error!(error = %e, workspace = %ws, "политика векторизации не прочиталась");
+                tracing::error!(error = %e, workspace = %ws, "vector policy did not read");
                 return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
             }
         };
+        policy_min = vector_stop_policy(&tx).await.map(|(_, m)| m).unwrap_or(policy_min);
         tx.commit().await.ok();
         if !enabled {
             return oops(
@@ -820,7 +828,9 @@ pub async fn similar(
     drop(client);
 
     let limit = p.limit.unwrap_or(crate::vector::SIMILAR_LIMIT as i64).clamp(1, SIMILAR_MAX as i64) as usize;
-    let min = p.min_score.unwrap_or(crate::vector::NEAR_DUPLICATE).clamp(0.0, 1.0);
+    // The default comes from the workspace policy, not from the binary: a
+    // threshold tuned for one corpus has no business governing another.
+    let min = p.min_score.unwrap_or(policy_min).clamp(0.0, 1.0);
     // Просим на один больше, когда ищем похожих на тикет: сам он найдётся
     // первым с оценкой 1.0, и без запаса выдача была бы короче заказанной.
     let ask = if exclude.is_some() { limit + 1 } else { limit };
@@ -859,23 +869,25 @@ pub async fn create(
     // бы соединение и блокировки впустую.
     let searching = if p.skip_search { None } else { app.vector.clone() };
     if let Some(v) = searching {
-            let enabled = {
+            let (stopping, min_score) = {
                 match db::begin(&mut client, &ws).await {
                     Ok(tx) => {
-                        let e = vector_enabled(&tx).await;
+                        let on = vector_enabled(&tx).await;
+                        let pol = vector_stop_policy(&tx).await;
                         tx.commit().await.ok();
-                        match e {
-                            Ok(e) => e,
-                            Err(err) => {
-                                tracing::error!(error = %err, workspace = %ws, "политика векторизации не прочиталась");
-                                false
+                        match (on, pol) {
+                            (Ok(true), Ok((stop, score))) => (stop, score),
+                            (Ok(_), Ok(_)) => (false, crate::vector::NEAR_DUPLICATE),
+                            (Err(err), _) | (_, Err(err)) => {
+                                tracing::error!(error = %err, workspace = %ws, "vector policy did not read");
+                                (false, crate::vector::NEAR_DUPLICATE)
                             }
                         }
                     }
-                    Err(_) => false,
+                    Err(_) => (false, crate::vector::NEAR_DUPLICATE),
                 }
             };
-            if enabled {
+            if stopping {
                 let body = p.body.clone().unwrap_or_default();
                 match crate::vector::similar(
                     &v,
@@ -884,7 +896,7 @@ pub async fn create(
                     &p.title,
                     &body,
                     crate::vector::SIMILAR_LIMIT,
-                    crate::vector::NEAR_DUPLICATE,
+                    min_score,
                 )
                 .await
                 {
@@ -2318,6 +2330,22 @@ pub(crate) async fn vector_enabled(
         .await?
         .map(|r| r.get(0))
         .unwrap_or(false))
+}
+
+/// Whether creating should refuse on a likely duplicate, and how close counts.
+///
+/// Separate from `enabled` on purpose: indexing a workspace and refusing its
+/// creates are different decisions with different blast radii. The threshold
+/// lives here rather than in the binary because it is a property of the corpus,
+/// and moving it must not need a release.
+pub(crate) async fn vector_stop_policy(
+    tx: &deadpool_postgres::Transaction<'_>,
+) -> anyhow::Result<(bool, f64)> {
+    Ok(tx
+        .query_opt("select stop_on_similar, min_score from vector_policy where only_row", &[])
+        .await?
+        .map(|r| (r.get(0), r.get(1)))
+        .unwrap_or((false, crate::vector::NEAR_DUPLICATE)))
 }
 
 #[cfg(test)]
