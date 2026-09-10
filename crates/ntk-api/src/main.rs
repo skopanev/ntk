@@ -177,7 +177,7 @@ async fn health(State(app): State<Arc<App>>) -> Response {
 }
 
 fn unhealthy(reason: &str) -> Response {
-    tracing::error!(%reason, "база недоступна");
+    tracing::error!(%reason, "the database is unavailable");
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({"status": "degraded", "reason": "database"})),
@@ -192,15 +192,15 @@ fn unhealthy(reason: &str) -> Response {
 /// нового пользователя — «а какие есть?».
 pub(crate) async fn whoami(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     let Some(key) = auth::bearer(&headers) else {
-        return err(StatusCode::UNAUTHORIZED, "нужен заголовок Authorization: Bearer");
+        return err(StatusCode::UNAUTHORIZED, "an Authorization: Bearer header is required");
     };
     let Ok(client) = app.pool.get().await else {
-        return unhealthy("база недоступна");
+        return unhealthy("the database is unavailable");
     };
     match auth::resolve(&client, key).await {
         Ok(Some(a)) => Json(json!({"user_id": a.user_id, "workspaces": a.workspaces})).into_response(),
-        Ok(None) => err(StatusCode::UNAUTHORIZED, "ключ неизвестен или отозван"),
-        Err(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Ok(None) => err(StatusCode::UNAUTHORIZED, "unknown or revoked key"),
+        Err(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     }
 }
 
@@ -284,7 +284,7 @@ pub(crate) async fn ticket_one(
     Query(q): Query<TicketsQuery>,
 ) -> Response {
     let Some(key) = auth::bearer(&headers) else {
-        return err(StatusCode::UNAUTHORIZED, "нужен заголовок Authorization: Bearer");
+        return err(StatusCode::UNAUTHORIZED, "an Authorization: Bearer header is required");
     };
     let mut client = match app.pool.get().await {
         Ok(c) => c,
@@ -292,24 +292,24 @@ pub(crate) async fn ticket_one(
     };
     let actor = match auth::resolve(&client, key).await {
         Ok(Some(a)) => a,
-        Ok(None) => return err(StatusCode::UNAUTHORIZED, "ключ неизвестен или отозван"),
+        Ok(None) => return err(StatusCode::UNAUTHORIZED, "unknown or revoked key"),
         Err(e) => {
             tracing::error!(error = %e, "не удалось разрешить ключ");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
     let Some(ws) = q.workspace.clone() else {
-        return err(StatusCode::BAD_REQUEST, "укажите workspace — значения по умолчанию нет");
+        return err(StatusCode::BAD_REQUEST, "name a workspace — there is no default");
     };
     if !actor.may_enter(&ws) {
-        return err(StatusCode::FORBIDDEN, "ключ не даёт доступа к этому воркспейсу");
+        return err(StatusCode::FORBIDDEN, "this key gives no access to that workspace");
     }
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "не удалось войти в воркспейс");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -329,11 +329,11 @@ pub(crate) async fn ticket_one(
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "не удалось прочитать тикет");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
     let Some(r) = row else {
-        return err(StatusCode::NOT_FOUND, "тикета нет в этом воркспейсе");
+        return err(StatusCode::NOT_FOUND, "no such ticket in this workspace");
     };
 
     let ticket_id: String = r.get(0);
@@ -344,7 +344,7 @@ pub(crate) async fn ticket_one(
         Ok(rows) => rows.iter().map(|d| d.get::<_, String>(0)).collect(),
         Err(e) => {
             tracing::error!(error = %e, "не удалось прочитать зависимости");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -377,7 +377,7 @@ pub(crate) async fn tickets(
     Query(q): Query<TicketsQuery>,
 ) -> Response {
     let Some(key) = auth::bearer(&headers) else {
-        return err(StatusCode::UNAUTHORIZED, "нужен заголовок Authorization: Bearer");
+        return err(StatusCode::UNAUTHORIZED, "an Authorization: Bearer header is required");
     };
 
     let mut client = match app.pool.get().await {
@@ -387,10 +387,10 @@ pub(crate) async fn tickets(
 
     let actor = match auth::resolve(&client, key).await {
         Ok(Some(a)) => a,
-        Ok(None) => return err(StatusCode::UNAUTHORIZED, "ключ неизвестен или отозван"),
+        Ok(None) => return err(StatusCode::UNAUTHORIZED, "unknown or revoked key"),
         Err(e) => {
             tracing::error!(error = %e, "не удалось разрешить ключ");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -399,11 +399,11 @@ pub(crate) async fn tickets(
     let Some(ws) = q.workspace.clone() else {
         return err(
             StatusCode::BAD_REQUEST,
-            "укажите workspace — значения по умолчанию нет",
+            "name a workspace — there is no default",
         );
     };
     if !actor.may_enter(&ws) {
-        return err(StatusCode::FORBIDDEN, "ключ не даёт доступа к этому воркспейсу");
+        return err(StatusCode::FORBIDDEN, "this key gives no access to that workspace");
     }
 
     let limit = q.limit.clamp(1, 500);
@@ -462,7 +462,7 @@ pub(crate) async fn tickets(
             Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "не удалось прочитать core.users");
-                return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         }
     } else {
@@ -476,14 +476,14 @@ pub(crate) async fn tickets(
                 .flat_map(|u| write::near_misses(u, &known_people))
                 .collect();
             let hint = if near.is_empty() {
-                String::from("Список: ntk meta")
+                String::from("The list: ntk meta")
             } else {
-                format!("Близкие: {}", near.join(", "))
+                format!("Close matches: {}", near.join(", "))
             };
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
-                    "error": format!("неизвестный исполнитель: {}. {hint}", unknown.join(", ")),
+                    "error": format!("unknown assignee: {}. {hint}", unknown.join(", ")),
                     "unknown_assignees": unknown,
                     "near": near
                 })),
@@ -496,7 +496,7 @@ pub(crate) async fn tickets(
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "не удалось войти в воркспейс");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -509,7 +509,7 @@ pub(crate) async fn tickets(
     if let Some(names) = &statuses {
         let known: Vec<String> = match tx.query("select name from statuses", &[]).await {
             Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
-            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         let unknown = write::absent_from(names, &known);
         if !unknown.is_empty() {
@@ -519,7 +519,7 @@ pub(crate) async fn tickets(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
                     "error": format!(
-                        "неизвестный статус: {}. Есть: {}",
+                        "unknown status: {}. Available: {}",
                         unknown.join(", "),
                         all.join(", ")
                     ),
@@ -533,7 +533,7 @@ pub(crate) async fn tickets(
     if let Some(pr) = &project {
         let known: Vec<String> = match tx.query("select id from projects", &[]).await {
             Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
-            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         let asked = vec![pr.clone()];
         if !write::absent_from(&asked, &known).is_empty() {
@@ -541,9 +541,9 @@ pub(crate) async fn tickets(
             // список проектов бывает в сотню строк.
             let near = write::near_misses(pr, &known);
             let hint = if near.is_empty() {
-                String::from("Список: ntk meta")
+                String::from("The list: ntk meta")
             } else {
-                format!("Близкие: {}", near.join(", "))
+                format!("Close matches: {}", near.join(", "))
             };
             return (
                 StatusCode::BAD_REQUEST,
@@ -641,7 +641,7 @@ pub(crate) async fn tickets(
             Ok(r) => r.get(0),
             Err(e) => {
                 tracing::error!(error = %e, workspace = %ws, "счёт тикетов не прошёл");
-                return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         };
         return (StatusCode::OK, Json(serde_json::json!({ "count": n }))).into_response();
@@ -684,7 +684,7 @@ pub(crate) async fn tickets(
         Ok(tickets) => (StatusCode::OK, Json(json!({"tickets": tickets}))).into_response(),
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "запрос тикетов не прошёл");
-            err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")
+            err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
 }

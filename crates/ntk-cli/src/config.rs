@@ -26,7 +26,7 @@ fn default_url() -> String {
 }
 
 pub fn path() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME не задан")?;
+    let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".config/ntk/config.json"))
 }
 
@@ -35,8 +35,8 @@ pub fn load() -> Result<Config> {
     if !p.exists() {
         return Ok(Config { url: default_url(), key: None });
     }
-    let raw = std::fs::read_to_string(&p).with_context(|| format!("не читается {}", p.display()))?;
-    Ok(serde_json::from_str(&raw).with_context(|| format!("{} не разбирается", p.display()))?)
+    let raw = std::fs::read_to_string(&p).with_context(|| format!("cannot read {}", p.display()))?;
+    Ok(serde_json::from_str(&raw).with_context(|| format!("{} does not parse", p.display()))?)
 }
 
 pub fn save(cfg: &Config) -> Result<()> {

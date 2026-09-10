@@ -308,15 +308,15 @@ async fn login() -> Result<()> {
     // Код печатается крупно и отдельно: его читают с экрана и набирают в
     // браузере, поэтому он не должен теряться среди прочего вывода.
     println!();
-    println!("  Откройте:  {}", start.verification_url);
-    println!("  Код:       {}", start.code);
+    println!("  Open:      {}", start.verification_url);
+    println!("  Code:      {}", start.code);
     println!();
-    println!("  Войдите рабочим аккаунтом. Жду…");
+    println!("  Sign in with your work account. Waiting…");
 
     let key = client.device_wait(&start.code, &start.device_secret, start.expires_in).await?;
     cfg.key = Some(key);
     config::save(&cfg)?;
-    println!("  Готово. Ключ сохранён в {}", config::path()?.display());
+    println!("  Done. The key is saved in {}", config::path()?.display());
     Ok(())
 }
 
@@ -334,7 +334,7 @@ async fn ls(
 
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let client = api::Client::new(&cfg.url);
 
@@ -355,7 +355,7 @@ async fn ls(
         return Ok(());
     }
     if tickets.is_empty() {
-        println!("пусто{}", if f.all || f.assignee.is_some() { "" } else { " — попробуйте --all" });
+        println!("empty{}", if f.all || f.assignee.is_some() { "" } else { " — try --all" });
         return Ok(());
     }
     for t in &tickets {
@@ -371,12 +371,12 @@ async fn ls(
     }
     // Показываем, что список ОБРЕЗАН, и чем листать. Молча отдать 20 из
     // двух тысяч — значит соврать о размере очереди.
-    print!("\nпоказано {}", tickets.len());
+    print!("\nshown {}", tickets.len());
     if !f.all && f.assignee.is_none() {
-        print!(", только свои (--all — все)");
+        print!(", yours only (--all for everyone's)");
     }
     if tickets.len() as i64 == limit {
-        print!("; дальше: -o {}", offset + limit);
+        print!("; next: -o {}", offset + limit);
     }
     println!(" · took {} ms", started.elapsed().as_millis());
     Ok(())
@@ -417,7 +417,7 @@ fn print_ticket(t: &ntk_core::Ticket) {
 /// обоим.
 fn walk_id(ws: &str, what: &str) -> Result<String> {
     use std::io::Write;
-    let home = std::env::var("HOME").context("HOME не задан")?;
+    let home = std::env::var("HOME").context("HOME is not set")?;
     let p = std::path::PathBuf::from(home).join(".config/ntk/walks.json");
     let key = format!("{ws}|{what}");
     let mut all: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&p)
@@ -446,17 +446,17 @@ fn walk_id(ws: &str, what: &str) -> Result<String> {
 
 fn describe(f: &api::Filters) -> String {
     let mut p = Vec::new();
-    if let Some(v) = &f.status { p.push(format!("статус {v}")); }
-    if let Some(v) = &f.assignee { p.push(format!("исполнитель {v}")); }
-    if let Some(v) = &f.project { p.push(format!("проект {v}")); }
+    if let Some(v) = &f.status { p.push(format!("status {v}")); }
+    if let Some(v) = &f.assignee { p.push(format!("assignee {v}")); }
+    if let Some(v) = &f.project { p.push(format!("project {v}")); }
     // Модуль обязан быть здесь, а не только в запросе: этой строкой различаются
     // СЕАНСЫ обхода (walk_id). Без него обходы с разным --module делят один
     // курсор, и второй продолжает с того места, где кончился первый.
-    if let Some(v) = &f.module { p.push(format!("модуль {v}")); }
-    if let Some(v) = &f.tag { p.push(format!("тег {v}{}", if f.strict { " целиком" } else { "" })); }
-    if let Some(v) = &f.title { p.push(format!("заголовок «{v}»")); }
-    if f.all { p.push("все, не только свои".into()); }
-    if p.is_empty() { "без отбора".into() } else { p.join(", ") }
+    if let Some(v) = &f.module { p.push(format!("module {v}")); }
+    if let Some(v) = &f.tag { p.push(format!("tag {v}{}", if f.strict { " exactly" } else { "" })); }
+    if let Some(v) = &f.title { p.push(format!("title {v:?}")); }
+    if f.all { p.push("everyone's, not just mine".into()); }
+    if p.is_empty() { "no filter".into() } else { p.join(", ") }
 }
 
 async fn walk(workspace: Option<String>, f: api::Filters, reset: bool, json: bool) -> Result<()> {
@@ -464,7 +464,7 @@ async fn walk(workspace: Option<String>, f: api::Filters, reset: bool, json: boo
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
     let id = walk_id(&ws, &describe(&f))?;
 
     let v = api::Client::new(&cfg.url).walk(key, &ws, &id, &f, reset).await?;
@@ -474,17 +474,17 @@ async fn walk(workspace: Option<String>, f: api::Filters, reset: bool, json: boo
     }
     if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
         println!(
-            "обход пройден: показано {} из {}",
+            "walk finished: {} of {} shown",
             v.get("seen").and_then(|x| x.as_i64()).unwrap_or(0),
             v.get("total").and_then(|x| x.as_i64()).unwrap_or(0)
         );
-        println!("начать заново: ntk walk --reset");
+        println!("start over: ntk walk --reset");
         return Ok(());
     }
     let t: ntk_core::Ticket = serde_json::from_value(v["ticket"].clone())?;
     // Счётчик в поток ошибок: тело тикета остаётся пригодным для конвейера.
     eprintln!(
-        "— {} из {} — {}",
+        "— {} of {} — {}",
         v.get("at").and_then(|x| x.as_i64()).unwrap_or(0),
         v.get("total").and_then(|x| x.as_i64()).unwrap_or(0),
         v.get("what").and_then(|x| x.as_str()).unwrap_or("")
@@ -499,7 +499,7 @@ async fn show(id: String, workspace: Option<String>, json: bool) -> Result<()> {
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let t = api::Client::new(&cfg.url).ticket(key, &ws, &id).await?;
 
@@ -531,7 +531,7 @@ async fn next(
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let pick = api::Pick {
         tag: tag.as_deref(),
@@ -548,7 +548,7 @@ async fn next(
         None => {
             // Пусто — это ответ, а не ошибка: свободных тикетов может просто
             // не быть, и агент должен отличать это от сбоя.
-            if json { println!("null"); } else { println!("свободных тикетов нет"); }
+            if json { println!("null"); } else { println!("no free tickets"); }
             Ok(())
         }
         Some(t) => {
@@ -556,10 +556,10 @@ async fn next(
                 println!("{}", serde_json::to_string_pretty(&t)?);
             } else {
                 println!("{}  {}", t.id, t.title);
-                println!("статус: {}", t.status);
+                println!("status: {}", t.status);
                 // Сказать вслух обязательно: иначе вывод неотличим от захвата,
                 // и человек уйдёт работать над тикетом, который ему не выдан.
-                if dry_run { println!("НЕ взят: показано, что взялось бы"); }
+                if dry_run { println!("NOT taken: this is what would have been taken"); }
             }
             eprintln!("· took {} ms", started.elapsed().as_millis());
     Ok(())
@@ -753,7 +753,7 @@ async fn create(
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let split = |s: Option<String>| -> Vec<String> {
         s.map(|v| v.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
@@ -785,7 +785,7 @@ async fn create(
     let id = client
         .create(key, &ws, &payload)
         .await?
-        .context("сервер не смог подобрать свободный идентификатор")?;
+        .context("the server could not find a free identifier")?;
 
     if json {
         println!("{}", serde_json::json!({ "id": id }));
@@ -800,14 +800,14 @@ async fn close(id: String, workspace: Option<String>, force: bool) -> Result<()>
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     // Передаётся только статус. Время закрытия ставит триггер при переходе:
     // подставь его здесь — и запишется момент выполнения команды вместо
     // момента, когда работа закончилась.
     let body = serde_json::json!({ "workspace": ws, "status": "done", "force": force });
     api::Client::new(&cfg.url).patch(key, &ws, &id, &body).await?;
-    println!("{id} закрыт");
+    println!("{id} closed");
     Ok(())
 }
 
@@ -834,7 +834,7 @@ async fn update(
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     if status.is_none() && title.is_none() && body.is_none() && append.is_none()
         && assignee.is_none() && tags.is_none() && deps.is_none()
@@ -843,15 +843,15 @@ async fn update(
     {
         // Команда без единого изменения молча ничего не делала бы и выглядела
         // успешной — это и есть тот отказ, который надо произнести вслух.
-        anyhow::bail!("нечего менять: передайте хотя бы одно из -s, -p, -T, -P, --title, -b, -A, -a, -t, --dep, --due");
+        anyhow::bail!("nothing to change: pass at least one of -s, -p, -T, -P, --title, -b, -A, -a, -t, --dep, --due");
     }
     // Заменить и дописать разом — почти наверняка описка, а цена описки здесь
     // чужой разбор в теле тикета.
     if body.is_some() && append.is_some() {
-        anyhow::bail!("-b и -A вместе не принимаются: либо заменить тело, либо дописать");
+        anyhow::bail!("-b and -A are not accepted together: either replace the body or append to it");
     }
     if append.as_deref().is_some_and(|a| a.trim().is_empty()) {
-        anyhow::bail!("-A пуст: дописывать нечего");
+        anyhow::bail!("-A is empty: nothing to append");
     }
 
     // Каждый тег со знаком. Без знака отвергаем ЗДЕСЬ, до похода на сервер:
@@ -862,14 +862,14 @@ async fn update(
             let list: Vec<String> = t.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect();
             for e in &list {
                 if !e.starts_with('+') && !e.starts_with('-') {
-                    anyhow::bail!("тег «{e}» без знака: нужен + или -");
+                    anyhow::bail!("tag {e:?} has no sign: use + or -");
                 }
             }
             Some(list)
         }
     };
 
-    // Три формы, как в старом --deps: "a,b" заменяет набор, "+a,-b" правит,
+    // Три формы, как в старом --deps: "a,b" replaces the set, "+a,-b" правит,
     // "" очищает. Здесь голый список НЕ ловушка, а описанное поведение, к
     // которому люди привыкли — в отличие от тегов, где документировались одни
     // дельты и голый список молча стирал остальные.
@@ -890,7 +890,7 @@ async fn update(
                 // шесть тегов: одно и то же написание значит разное в
                 // зависимости от соседей.
                 anyhow::bail!(
-                    "нельзя смешивать замену и правку: либо \"a,b\" целиком, либо каждый со знаком"
+                    "signs must not be mixed with a plain list: either \"a,b\" as a whole, or each with a sign"
                 );
             }
         }
@@ -945,7 +945,7 @@ async fn update(
         }
     }
 
-    println!("{id} изменён");
+    println!("{id} changed");
     Ok(())
 }
 
@@ -959,11 +959,11 @@ async fn start(id: String, workspace: Option<String>) -> Result<()> {
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let taken = api::Client::new(&cfg.url).start(key, &ws, &id).await?;
     println!("{}  {}", taken.id, taken.title);
-    println!("статус: {}", taken.status);
+    println!("status: {}", taken.status);
     Ok(())
 }
 
@@ -972,7 +972,7 @@ async fn deps(id: String, workspace: Option<String>, up_only: bool, down_only: b
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let tree = api::Client::new(&cfg.url).deps(key, &ws, &id).await?;
     if json {
@@ -987,7 +987,7 @@ async fn deps(id: String, workspace: Option<String>, up_only: bool, down_only: b
             v.get("id").and_then(|x| x.as_str()).unwrap_or(""),
             v.get("status").and_then(|x| x.as_str()).unwrap_or(""),
             v.get("title").and_then(|x| x.as_str()).unwrap_or(""),
-            if removed { "  (убран)" } else { "" }
+            if removed { "  (removed)" } else { "" }
         )
     };
     let side = |name: &str| -> Vec<serde_json::Value> {
@@ -1001,17 +1001,17 @@ async fn deps(id: String, workspace: Option<String>, up_only: bool, down_only: b
     let show_down = down_only || !up_only;
     let up = if show_up { side("up") } else { Vec::new() };
     if !up.is_empty() {
-        println!("ждёт:");
+        println!("waits for:");
         for v in &up { println!("  {}", line(v)); }
     }
     println!("{}", line(&tree));
     let down = if show_down { side("down") } else { Vec::new() };
     if !down.is_empty() {
-        println!("его ждут:");
+        println!("waited on by:");
         for v in &down { println!("  {}", line(v)); }
     }
     if up.is_empty() && down.is_empty() {
-        println!("(зависимостей нет ни в одну сторону)");
+        println!("(no dependencies in either direction)");
     }
     Ok(())
 }
@@ -1022,12 +1022,12 @@ async fn rm(id: String, workspace: Option<String>, yes: bool) -> Result<()> {
         // повис бы навсегда, а агенты работают именно так.
         use std::io::{IsTerminal, Write};
         if std::io::stdin().is_terminal() {
-            print!("убрать {id}? [y/N] ");
+            print!("remove {id}? [y/N] ");
             std::io::stdout().flush().ok();
             let mut a = String::new();
             std::io::stdin().read_line(&mut a).ok();
             if !matches!(a.trim(), "y" | "yes" | "д" | "да") {
-                println!("отменено");
+                println!("cancelled");
                 return Ok(());
             }
         }
@@ -1036,14 +1036,14 @@ async fn rm(id: String, workspace: Option<String>, yes: bool) -> Result<()> {
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let waiting = api::Client::new(&cfg.url).remove(key, &ws, &id).await?;
-    println!("{id} убран");
+    println!("{id} removed");
     // Тикеты, которые его ждали, названы вслух: их зависимость сохранилась, но
     // ждут они теперь то, чего не видно в списках, и знать об этом надо сразу.
     if !waiting.is_empty() {
-        println!("на нём стояли: {}", waiting.join(", "));
+        println!("it was waited on by: {}", waiting.join(", "));
     }
     Ok(())
 }
@@ -1063,12 +1063,12 @@ async fn similar(
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
     if id.is_some() && (title.is_some() || body.is_some()) {
-        anyhow::bail!("либо --id, либо текст: вместе не принимаются");
+        anyhow::bail!("either --id or text: not both");
     }
     if id.is_none() && title.is_none() && body.is_none() {
-        anyhow::bail!("нужен текст заголовка или --id тикета");
+        anyhow::bail!("a title text or a ticket --id is required");
     }
 
     let mut req = serde_json::json!({});
@@ -1085,14 +1085,14 @@ async fn similar(
     }
     let hits = v.get("similar").and_then(|s| s.as_array()).cloned().unwrap_or_default();
     if hits.is_empty() {
-        println!("похожих не нашлось");
+        println!("nothing similar found");
         return Ok(());
     }
     println!("{}", api::render_similar(&hits));
     Ok(())
 }
 
-/// Сколько тикет стоит в текущем статусе, коротко: `3д`, `2ч`, `—`.
+/// Сколько тикет стоит в текущем статусе, коротко: `3d`, `2h`, `—`.
 ///
 /// Показывается в списке, потому что «сколько висит» — первое, что спрашивают о
 /// чужой работе, и до сих пор ответить на это было нечем: поле база заполняла,
@@ -1121,9 +1121,9 @@ fn span_short(t: jiff::Timestamp) -> String {
     }
     let days = secs / 86_400;
     if days > 0 {
-        format!("{days}д")
+        format!("{days}d")
     } else {
-        format!("{}ч", secs / 3_600)
+        format!("{}h", secs / 3_600)
     }
 }
 
@@ -1132,7 +1132,7 @@ async fn meta(workspace: Option<String>, json: bool) -> Result<()> {
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
 
     let m = api::Client::new(&cfg.url).meta(key, &ws).await?;
     if json {
@@ -1147,13 +1147,13 @@ async fn meta(workspace: Option<String>, json: bool) -> Result<()> {
             .unwrap_or_default()
     };
 
-    println!("воркспейс: {ws}");
+    println!("workspace: {ws}");
     let all = list("workspaces");
     if all.len() > 1 {
-        println!("доступны:  {}", all.join(", "));
+        println!("available:  {}", all.join(", "));
     }
     println!();
-    println!("статусы:");
+    println!("statuses:");
     if let Some(items) = m.get("statuses").and_then(|v| v.as_array()) {
         for s in items {
             let force = s.get("requires_force").and_then(|f| f.as_bool()).unwrap_or(false);
@@ -1163,13 +1163,13 @@ async fn meta(workspace: Option<String>, json: bool) -> Result<()> {
                 s.get("group").and_then(|x| x.as_str()).unwrap_or(""),
                 // Гард показывается словами: «нужен --force» понятнее, чем
                 // requires_force=true, а знать это надо до правки, не после.
-                if force { "правка требует --force" } else { "" }
+                if force { "editing requires --force" } else { "" }
             );
         }
     }
     println!();
-    println!("приоритеты: {}", list("priorities").join(", "));
-    println!("проекты:    {}", list("projects").join(", "));
+    println!("priorities: {}", list("priorities").join(", "));
+    println!("projects:   {}", list("projects").join(", "));
     // Модули печатаются с проектом: одно и то же имя в двух проектах — разные
     // модули, и список без проекта вводил бы в заблуждение ровно там, где это
     // важнее всего.
@@ -1183,7 +1183,7 @@ async fn meta(workspace: Option<String>, json: bool) -> Result<()> {
                     x.get("name").and_then(|n| n.as_str()).unwrap_or("")
                 ))
                 .collect();
-            println!("модули:     {}", names.join(", "));
+            println!("modules:    {}", names.join(", "));
         }
     }
     if let Some(people) = m.get("people").and_then(|v| v.as_array()) {
@@ -1192,12 +1192,12 @@ async fn meta(workspace: Option<String>, json: bool) -> Result<()> {
             .map(|p| {
                 let id = p.get("id").and_then(|x| x.as_str()).unwrap_or("");
                 match p.get("kind").and_then(|x| x.as_str()) {
-                    Some("agent") => format!("{id} (агент)"),
+                    Some("agent") => format!("{id} (agent)"),
                     _ => id.to_string(),
                 }
             })
             .collect();
-        println!("люди:       {}", names.join(", "));
+        println!("people:     {}", names.join(", "));
     }
     Ok(())
 }
@@ -1208,11 +1208,11 @@ async fn whoami() -> Result<()> {
     let cfg = config::load()?;
     let key = config::require_key(&cfg)?;
     let (user, ws) = api::Client::new(&cfg.url).me(key).await?;
-    println!("вы: {user}");
+    println!("you: {user}");
     if ws.is_empty() {
-        println!("воркспейсов нет — обратитесь к администратору");
+        println!("no workspaces — ask an administrator");
     } else {
-        println!("воркспейсы: {}", ws.join(", "));
+        println!("workspaces: {}", ws.join(", "));
     }
     Ok(())
 }
@@ -1229,28 +1229,28 @@ async fn modules(
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
     let client = api::Client::new(&cfg.url);
 
     if add {
-        let project = project.clone().context("добавление требует проекта: -P")?;
+        let project = project.clone().context("adding needs a project: -P")?;
         // Источник тот же, что у замены, но требование --stdin здесь мягче:
         // добавление ничего не убирает, поэтому забытый флаг не может стоить
         // реестра. Имена можно передать и через запятую.
         let list: Vec<String> = if stdin {
             let mut text = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
-                .context("не удалось прочитать список со стандартного ввода")?;
+                .context("could not read the list from standard input")?;
             text.lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .map(String::from)
                 .collect()
         } else {
-            anyhow::bail!("назовите модули: --add --stdin (по имени в строке)");
+            anyhow::bail!("name the modules: --add --stdin (one name per line)");
         };
         if list.is_empty() {
-            anyhow::bail!("список пуст: нечего добавлять");
+            anyhow::bail!("the list is empty: nothing to add");
         }
         let r = client.add_modules(key, &ws, &project, &list).await?;
         if json {
@@ -1262,28 +1262,28 @@ async fn modules(
                 .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
                 .unwrap_or_default()
         };
-        for (label, key) in [("заведено", "added"), ("возвращено из архива", "restored")] {
+        for (label, key) in [("filed", "added"), ("brought back from the archive", "restored")] {
             let v = names(key);
             if !v.is_empty() { println!("  {label}: {}", v.join(", ")); }
         }
         // Сказать это вслух важнее, чем кажется: операцию берут именно потому,
         // что она ничего не убирает, и проверяющий должен видеть подтверждение,
         // а не выводить его из тишины.
-        println!("  ничего не убрано из действующих");
+        println!("  nothing was taken out of the live set");
         return Ok(());
     }
 
     if replace {
-        let project = project.context("замена списка требует проекта: -P")?;
+        let project = project.context("replacing the list needs a project: -P")?;
         if !stdin {
             // Замена набора необратима для тех, кто исчезнет, поэтому источник
             // называется явно. Молчаливое чтение stdin означало бы, что
             // забытый флаг стирает реестр.
-            anyhow::bail!("укажите --stdin: список читается со стандартного ввода, по имени в строке");
+            anyhow::bail!("pass --stdin: the list is read from standard input, one name per line");
         }
         let mut text = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
-            .context("не удалось прочитать список со стандартного ввода")?;
+            .context("could not read the list from standard input")?;
         let list: Vec<String> = text
             .lines()
             .map(str::trim)
@@ -1291,7 +1291,7 @@ async fn modules(
             .map(String::from)
             .collect();
         if list.is_empty() {
-            anyhow::bail!("список пуст: замена стёрла бы весь реестр проекта; если это намерение, передайте хотя бы один модуль");
+            anyhow::bail!("the list is empty: replacing would wipe the project's whole registry; if that is the intent, send at least one module");
         }
         let r = client.replace_modules(key, &ws, &project, &list).await?;
         if json {
@@ -1303,9 +1303,9 @@ async fn modules(
                 .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
                 .unwrap_or_default()
         };
-        println!("{project}: всего {}", r.get("total").and_then(|t| t.as_i64()).unwrap_or(0));
-        for (label, key) in [("добавлено", "added"), ("в архив", "archived"),
-                             ("удалено", "deleted"), ("возвращено", "restored")] {
+        println!("{project}: {} in total", r.get("total").and_then(|t| t.as_i64()).unwrap_or(0));
+        for (label, key) in [("added", "added"), ("to the archive", "archived"),
+                             ("deleted", "deleted"), ("brought back", "restored")] {
             let v = names(key);
             if !v.is_empty() { println!("  {label}: {}", v.join(", ")); }
         }
@@ -1326,7 +1326,7 @@ async fn modules(
         return Ok(());
     }
     if rows.is_empty() {
-        println!("модулей нет");
+        println!("no modules");
         return Ok(());
     }
     for x in rows {
@@ -1337,7 +1337,7 @@ async fn modules(
             "{:<12} {:<20} {}",
             x.get("project").and_then(|v| v.as_str()).unwrap_or(""),
             x.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-            if archived { "в архиве" } else { "" }
+            if archived { "archived" } else { "" }
         );
     }
     Ok(())
@@ -1393,7 +1393,7 @@ async fn projects(
     let key = config::require_key(&cfg)?;
     let ws = workspace
         .or_else(config::workspace_from_rc)
-        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+        .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
     let c = api::Client::new(&cfg.url);
 
     let asked = [archive.is_some(), unarchive.is_some(), move_from.is_some()]
@@ -1401,21 +1401,21 @@ async fn projects(
         .filter(|x| **x)
         .count();
     if asked > 1 {
-        anyhow::bail!("за один раз — одно действие: --archive, --unarchive или --move");
+        anyhow::bail!("one action at a time: --archive, --unarchive or --move");
     }
 
     if let Some(from) = move_from {
-        let to = to.context("--move требует --to: назовите целевой проект")?;
+        let to = to.context("--move needs --to: name the target project")?;
         let v = c.move_project(&key, &ws, &from, &to).await?;
         if json {
             println!("{v}");
         } else {
             let n = v.get("moved").and_then(|x| x.as_i64()).unwrap_or(0);
-            println!("перенесено тикетов: {n} — {from} → {to}");
+            println!("tickets moved: {n} — {from} → {to}");
             // Сказать это обязательно: иначе несовпадение префикса выглядит
             // поломкой, и кто-нибудь пойдёт «чинить» идентификаторы.
-            println!("идентификаторы не менялись: тикеты остаются с прежним префиксом {from}-");
-            println!("убрать опустевшее имя из выбора: ntk projects --archive {from} -W {ws}");
+            println!("identifiers did not change: the tickets keep the old {from}- prefix");
+            println!("retire the emptied name: ntk projects --archive {from} -W {ws}");
         }
         return Ok(());
     }
@@ -1426,9 +1426,9 @@ async fn projects(
         if json {
             println!("{v}");
         } else if want_archived {
-            println!("{id} убран из выбора; заведённые тикеты остались на месте");
+            println!("{id} is retired from the choices; the tickets already filed stay where they are");
         } else {
-            println!("{id} снова доступен для выбора");
+            println!("{id} is available for selection again");
         }
         return Ok(());
     }
@@ -1444,7 +1444,7 @@ async fn projects(
                 println!("{}", p.as_str().unwrap_or_default());
             }
         }
-        _ => println!("проектов нет"),
+        _ => println!("no projects"),
     }
     Ok(())
 }

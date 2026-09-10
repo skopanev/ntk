@@ -29,22 +29,22 @@ pub const PLATFORM: &str = concat!(env!("NTK_OS"), "-", env!("NTK_ARCH"));
 async fn latest(base: &str) -> Result<Release> {
     let resp = reqwest::get(format!("{}/v1/version?platform={}", base.trim_end_matches('/'), PLATFORM))
         .await
-        .context("сервис недоступен")?;
+        .context("the service is unavailable")?;
 
     // Отказ разбирается ДО тела: иначе сервер говорит человеку по делу, а он
     // видит «ответ о версии не разобрался — missing field version». Ровно так
     // и вышло, когда platform стал обязательным: клиенты постарше его не
     // слали, получали внятное объяснение и показывали вместо него мусор.
     let status = resp.status();
-    let body = resp.text().await.context("ответ сервиса не дочитался")?;
+    let body = resp.text().await.context("the service response was not fully read")?;
     if !status.is_success() {
         let msg = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
             .unwrap_or_else(|| body.trim().to_owned());
-        bail!("сервис не отдал версию для {PLATFORM} ({status}): {msg}");
+        bail!("the service gave no version for {PLATFORM} ({status}): {msg}");
     }
-    serde_json::from_str(&body).context("ответ о версии не разобрался")
+    serde_json::from_str(&body).context("the version response did not parse")
 }
 
 /// Сравнение по частям, а не строкой: «0.5.10» больше «0.5.9», хотя строкой
@@ -62,34 +62,34 @@ fn newer(a: &str, b: &str) -> bool {
 pub async fn run(base: &str) -> Result<()> {
     let r = latest(base).await?;
     if !newer(&r.version, CURRENT) {
-        println!("уже последняя: {CURRENT}");
+        println!("already the latest: {CURRENT}");
         return Ok(());
     }
     println!("{CURRENT} → {}", r.version);
     apply(&r).await?;
-    println!("готово: {}", r.version);
+    println!("done: {}", r.version);
     // Работающий сервер MCP от подмены файла не меняется: процесс запущен
     // старым бинарником и живёт до конца сессии. Переспросить его список
     // инструментов бесполезно — он честно отдаст тот, что у него есть, и
     // выглядеть это будет как «новых параметров нет», а не как «нужен
     // перезапуск». Сказать это здесь дешевле, чем выяснять каждый раз заново.
-    println!("перезапустите Claude — иначе он продолжит видеть прежний набор инструментов");
+    println!("restart your client — otherwise it keeps seeing the previous tool set");
     Ok(())
 }
 
 async fn apply(r: &Release) -> Result<()> {
-    let bytes = reqwest::get(&r.url).await.context("не скачалось")?.bytes().await?;
+    let bytes = reqwest::get(&r.url).await.context("the download failed")?.bytes().await?;
 
     let got = hex::encode(Sha256::digest(&bytes));
     if got != r.sha256 {
-        bail!("контрольная сумма не сошлась: ожидали {}, получили {got}", r.sha256);
+        bail!("checksum mismatch: expected {}, got {got}", r.sha256);
     }
 
     // Кладём рядом с текущим бинарём: подмена должна быть переименованием в
     // пределах одной файловой системы, иначе она не атомарна и можно остаться
     // с половиной файла.
-    let me = std::env::current_exe().context("не понять, где я")?;
-    let dir = me.parent().context("нет каталога")?;
+    let me = std::env::current_exe().context("cannot tell where I am")?;
+    let dir = me.parent().context("no directory")?;
     let tmp = dir.join(".ntk.new");
     {
         let mut f = std::fs::File::create(&tmp)?;
@@ -111,17 +111,17 @@ async fn apply(r: &Release) -> Result<()> {
             .args(["-v", "--strict"])
             .arg(&tmp)
             .output()
-            .context("codesign не запустился")?;
+            .context("codesign did not run")?;
         if !out.status.success() {
             let _ = std::fs::remove_file(&tmp);
             bail!(
-                "подпись скачанного не прошла проверку — обновление отменено: {}",
+                "the signature of the download failed verification — the update is cancelled: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
     }
 
-    std::fs::rename(&tmp, &me).context("не удалось заменить бинарь")?;
+    std::fs::rename(&tmp, &me).context("could not replace the binary")?;
     Ok(())
 }
 

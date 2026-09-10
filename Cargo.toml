@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.47"
+version = "0.5.48"
 edition = "2024"
 rust-version = "1.88"
 repository = "git@github.com:skopanev/ntk.git"

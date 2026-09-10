@@ -35,23 +35,23 @@ async fn enter(
     workspace: Option<&str>,
 ) -> Result<(deadpool_postgres::Client, auth::Actor, String), Response> {
     let Some(key) = auth::bearer(headers) else {
-        return Err(oops(StatusCode::UNAUTHORIZED, "нужен заголовок Authorization: Bearer"));
+        return Err(oops(StatusCode::UNAUTHORIZED, "an Authorization: Bearer header is required"));
     };
     let client = app
         .pool
         .get()
         .await
-        .map_err(|_| oops(StatusCode::SERVICE_UNAVAILABLE, "база недоступна"))?;
+        .map_err(|_| oops(StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable"))?;
     let actor = match auth::resolve(&client, key).await {
         Ok(Some(a)) => a,
-        Ok(None) => return Err(oops(StatusCode::UNAUTHORIZED, "ключ неизвестен или отозван")),
-        Err(_) => return Err(oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")),
+        Ok(None) => return Err(oops(StatusCode::UNAUTHORIZED, "unknown or revoked key")),
+        Err(_) => return Err(oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
     };
     let Some(ws) = workspace else {
-        return Err(oops(StatusCode::BAD_REQUEST, "укажите workspace — значения по умолчанию нет"));
+        return Err(oops(StatusCode::BAD_REQUEST, "name a workspace — there is no default"));
     };
     if !actor.may_enter(ws) {
-        return Err(oops(StatusCode::FORBIDDEN, "ключ не даёт доступа к этому воркспейсу"));
+        return Err(oops(StatusCode::FORBIDDEN, "this key gives no access to that workspace"));
     }
     Ok((client, actor, ws.to_string()))
 }
@@ -99,7 +99,7 @@ pub async fn next(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     let prefer: Vec<String> = q
         .prefer
@@ -132,7 +132,7 @@ pub async fn next(
     match claim::next(&tx, &prefer, &pick).await {
         Ok(Some(c)) => {
             if tx.commit().await.is_err() {
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
             // Захват больше не пишется в assignee — там владелец тикета, а не
             // тот, кто взял его в работу. Лог остаётся единственным следом
@@ -152,7 +152,7 @@ pub async fn next(
         Ok(None) => (StatusCode::NO_CONTENT, ()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "next не прошёл");
-            oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")
+            oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
 }
@@ -170,19 +170,19 @@ pub async fn start(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     // Идентификатор приводится к каноническому виду сразу после входа в
     // воркспейс: дальше все сравнения точные, и ни одно из них не надо помнить.
     let id = match canonical_id(&tx, &id).await {
         Some(v) => v,
-        None => return oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+        None => return oops(StatusCode::NOT_FOUND, "no such ticket"),
     };
 
     match claim::start(&tx, &id).await {
         Ok(claim::StartOutcome::Taken(c)) => {
             if tx.commit().await.is_err() {
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
             tracing::info!(actor = %actor.user_id, ticket = %c.id, workspace = %ws, "тикет взят");
             Json(json!({"id": c.id, "title": c.title, "status": c.status, "claimed": true})).into_response()
@@ -190,17 +190,17 @@ pub async fn start(
         Ok(claim::StartOutcome::AlreadyTaken { status, agent }) => (
             StatusCode::CONFLICT,
             Json(json!({
-                "error": "тикет уже взят",
+                "error": "the ticket is already taken",
                 "status": status,
                 "agent": agent
             })),
         )
             .into_response(),
-        Ok(claim::StartOutcome::NoSuchTicket) => oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+        Ok(claim::StartOutcome::NoSuchTicket) => oops(StatusCode::NOT_FOUND, "no such ticket"),
         Ok(claim::StartOutcome::Blocked { deps }) => (
             StatusCode::CONFLICT,
             Json(json!({
-                "error": "тикет заблокирован незакрытыми зависимостями",
+                "error": "the ticket is blocked by unclosed dependencies",
                 "blocked_by": deps.iter()
                     .map(|(id, st)| json!({"id": id, "status": st}))
                     .collect::<Vec<_>>()
@@ -209,7 +209,7 @@ pub async fn start(
             .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "start не прошёл");
-            oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")
+            oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
 }
@@ -290,23 +290,23 @@ pub async fn patch(
     if p.body.is_some() && p.body_append.is_some() {
         return oops(
             StatusCode::BAD_REQUEST,
-            "body и body_append вместе не принимаются: либо заменить тело, либо дописать",
+            "body and body_append are not accepted together: either replace the body or append to it",
         );
     }
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     // Идентификатор приводится к каноническому виду сразу после входа в
     // воркспейс: дальше все сравнения точные, и ни одно из них не надо помнить.
     let id = match canonical_id(&tx, &id).await {
         Some(v) => v,
-        None => return oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+        None => return oops(StatusCode::NOT_FOUND, "no such ticket"),
     };
 
 
     let Ok(Some(row)) = tx.query_opt("select status from tickets where id = $1 and deleted_at is null", &[&id]).await else {
-        return oops(StatusCode::NOT_FOUND, "такого тикета нет");
+        return oops(StatusCode::NOT_FOUND, "no such ticket");
     };
     let current: String = row.get(0);
 
@@ -359,14 +359,14 @@ pub async fn patch(
                 return (
                     StatusCode::CONFLICT,
                     Json(json!({
-                        "error": format!("тикет в статусе {current} уже подобран — нужен force"),
+                        "error": format!("a ticket in status {current} is already picked up — force is required"),
                         "status": current
                     })),
                 )
                     .into_response()
             }
             Ok(false) => {}
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         }
     }
 
@@ -375,7 +375,7 @@ pub async fn patch(
             let (sign, name) = e.split_at(1);
             let name = name.trim();
             if name.is_empty() || !matches!(sign, "+" | "-") {
-                return oops(StatusCode::BAD_REQUEST, "каждый тег должен начинаться с + или -");
+                return oops(StatusCode::BAD_REQUEST, "every tag must start with + or -");
             }
             let sql = if sign == "+" {
                 "update tickets set tags = (select array_agg(distinct t) from unnest(tags || $2::text) t) where id = $1"
@@ -383,20 +383,20 @@ pub async fn patch(
                 "update tickets set tags = array_remove(tags, $2) where id = $1"
             };
             if tx.execute(sql, &[&id, &name]).await.is_err() {
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         }
     }
 
     if let Some(set) = &p.dep_set {
         if tx.execute("delete from deps where ticket_id = $1", &[&id]).await.is_err() {
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
         for target in set {
             let target = target.trim();
             if target.is_empty() { continue; }
             if target.eq_ignore_ascii_case(&id) {
-                return oops(StatusCode::BAD_REQUEST, "тикет не может ждать сам себя");
+                return oops(StatusCode::BAD_REQUEST, "a ticket cannot wait for itself");
             }
             match tx
                 .execute(
@@ -410,12 +410,12 @@ pub async fn patch(
                 Ok(0) => {
                     return (
                         StatusCode::BAD_REQUEST,
-                        Json(json!({"error": format!("нет такого тикета: {target}")})),
+                        Json(json!({"error": format!("no such ticket: {target}")})),
                     )
                         .into_response()
                 }
                 Ok(_) => {}
-                Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+                Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
             }
         }
     }
@@ -423,16 +423,16 @@ pub async fn patch(
     if let Some(edits) = &p.dep_edits {
         for e in edits {
             if e.len() < 2 {
-                return oops(StatusCode::BAD_REQUEST, "каждая зависимость должна начинаться с + или -");
+                return oops(StatusCode::BAD_REQUEST, "every dependency must start with + or -");
             }
             let (sign, target) = e.split_at(1);
             let target = target.trim();
             if target.is_empty() || !matches!(sign, "+" | "-") {
-                return oops(StatusCode::BAD_REQUEST, "каждая зависимость должна начинаться с + или -");
+                return oops(StatusCode::BAD_REQUEST, "every dependency must start with + or -");
             }
             if sign == "+" {
                 if target.eq_ignore_ascii_case(&id) {
-                    return oops(StatusCode::BAD_REQUEST, "тикет не может ждать сам себя");
+                    return oops(StatusCode::BAD_REQUEST, "a ticket cannot wait for itself");
                 }
                 // Вставка идёт SELECT-ом по существующему тикету: если цели
                 // нет, строк будет ноль, и мы скажем об этом вместо того,
@@ -455,13 +455,13 @@ pub async fn patch(
                         if matches!(exists, Ok(None)) {
                             return (
                                 StatusCode::BAD_REQUEST,
-                                Json(json!({"error": format!("нет такого тикета: {target}")})),
+                                Json(json!({"error": format!("no such ticket: {target}")})),
                             )
                                 .into_response();
                         }
                     }
                     Ok(_) => {}
-                    Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+                    Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
                 }
             } else if tx
                 .execute(
@@ -471,7 +471,7 @@ pub async fn patch(
                 .await
                 .is_err()
             {
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         }
     }
@@ -491,7 +491,7 @@ pub async fn patch(
         if matches!(current, Some(Some(_))) {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "у тикета есть модуль: при смене проекта назовите модуль нового проекта или снимите его пустой строкой"})),
+                Json(json!({"error": "the ticket has a module: when changing project, name a module of the new project or clear it with an empty string"})),
             )
                 .into_response();
         }
@@ -511,7 +511,7 @@ pub async fn patch(
         if module_is_archived(&tx, target_project.as_deref(), m).await {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("модуль {m} в архиве — переназначить на него нельзя")})),
+                Json(json!({"error": format!("module {m} is archived — a ticket cannot be moved onto it")})),
             )
                 .into_response();
         }
@@ -523,7 +523,7 @@ pub async fn patch(
             .await
             .is_err()
         {
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     }
 
@@ -569,9 +569,9 @@ pub async fn patch(
                     return oops(
                         StatusCode::BAD_REQUEST,
                         &format!(
-                            "тикет уже длиннее предела ({was} при {max}), дописать в него можно, \
-                             но не больше {max} символов за раз — пришло {add}. Разбейте на \
-                             отдельные тикеты и свяжите через --deps."
+                            "the ticket is already over the limit ({was} against {max}); appending is allowed, \
+                             but not more than {max} characters at a time — {add} arrived. Split it into \
+                             separate tickets and link them with --deps."
                         ),
                     );
                 }
@@ -579,8 +579,8 @@ pub async fn patch(
                 return oops(
                     StatusCode::BAD_REQUEST,
                     &format!(
-                        "тело после дописывания длиннее предела: {} символов при {max}. \
-                         Разбейте работу на отдельные тикеты и свяжите их через --deps.",
+                        "the body after appending is over the limit: {} characters against {max}. \
+                         Split the work into separate tickets and link them with --deps.",
                         was + add
                     ),
                 );
@@ -619,7 +619,7 @@ pub async fn patch(
     // отправляемый текст (приоритет, исполнитель, срок), долга не создаёт.
     if let (Ok(_), Err(e)) = (&r, enqueue_upsert(&tx, &id).await) {
         tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     match r {
         Ok(_) if tx.commit().await.is_ok() => {
@@ -644,10 +644,10 @@ pub async fn patch(
             );
             match explain_constraint(constraint) {
                 Some(m) => oops(StatusCode::BAD_REQUEST, &m),
-                None => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+                None => oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
             }
         }
-        _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     }
 }
 
@@ -748,7 +748,7 @@ pub async fn similar(
     let Some(v) = app.vector.clone() else {
         return oops(
             StatusCode::CONFLICT,
-            "поиск похожих недоступен: у сервиса нет ключа на векторизацию",
+            "the similarity search is unavailable: the service has no embedding key",
         );
     };
     let mut policy_min = crate::vector::NEAR_DUPLICATE;
@@ -758,30 +758,30 @@ pub async fn similar(
         if p.title.is_some() || p.body.is_some() {
             return oops(
                 StatusCode::BAD_REQUEST,
-                "id и текст вместе не принимаются: либо похожие на тикет, либо на присланный текст",
+                "id and text are not accepted together: either similar to a ticket, or similar to the text you sent",
             );
         }
         let tx = match db::begin(&mut client, &ws).await {
             Ok(t) => t,
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         let enabled = match vector_enabled(&tx).await {
             Ok(e) => e,
             Err(e) => {
                 tracing::error!(error = %e, workspace = %ws, "vector policy did not read");
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         };
         if !enabled {
             return oops(
                 StatusCode::CONFLICT,
-                "в этом воркспейсе векторизация выключена: искать не по чему",
+                "vectorisation is switched off in this workspace: there is nothing to search",
             );
         }
         policy_min = vector_stop_policy(&tx).await.map(|(_, m)| m).unwrap_or(policy_min);
         let canonical = match canonical_id(&tx, id).await {
             Some(c) => c,
-            None => return oops(StatusCode::NOT_FOUND, "тикета нет"),
+            None => return oops(StatusCode::NOT_FOUND, "no such ticket"),
         };
         let row = tx
             .query_opt(
@@ -790,7 +790,7 @@ pub async fn similar(
             )
             .await;
         let Ok(Some(r)) = row else {
-            return oops(StatusCode::NOT_FOUND, "тикета нет");
+            return oops(StatusCode::NOT_FOUND, "no such ticket");
         };
         // Берём ТЕКУЩИЙ текст, а не вектор из индекса: индекс мог отстать, и
         // тогда искали бы похожих на прошлую редакцию тикета.
@@ -801,13 +801,13 @@ pub async fn similar(
     } else {
         let tx = match db::begin(&mut client, &ws).await {
             Ok(t) => t,
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         let enabled = match vector_enabled(&tx).await {
             Ok(e) => e,
             Err(e) => {
                 tracing::error!(error = %e, workspace = %ws, "vector policy did not read");
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         };
         policy_min = vector_stop_policy(&tx).await.map(|(_, m)| m).unwrap_or(policy_min);
@@ -815,13 +815,13 @@ pub async fn similar(
         if !enabled {
             return oops(
                 StatusCode::CONFLICT,
-                "в этом воркспейсе векторизация выключена: искать не по чему",
+                "vectorisation is switched off in this workspace: there is nothing to search",
             );
         }
         let t = p.title.unwrap_or_default();
         let b = p.body.unwrap_or_default();
         if t.trim().is_empty() && b.trim().is_empty() {
-            return oops(StatusCode::BAD_REQUEST, "нужен текст или id тикета");
+            return oops(StatusCode::BAD_REQUEST, "give text or a ticket id");
         }
         (t, b, None)
     };
@@ -846,7 +846,7 @@ pub async fn similar(
         }
         Err(e) => {
             tracing::warn!(error = %e, workspace = %ws, "поиск похожих не удался");
-            oops(StatusCode::BAD_GATEWAY, "поиск похожих сейчас недоступен")
+            oops(StatusCode::BAD_GATEWAY, "the similarity search is unavailable right now")
         }
     }
 }
@@ -861,7 +861,7 @@ pub async fn create(
         Err(r) => return r,
     };
     if p.title.trim().is_empty() {
-        return oops(StatusCode::BAD_REQUEST, "у тикета должен быть заголовок");
+        return oops(StatusCode::BAD_REQUEST, "a ticket must have a title");
     }
 
     // Поиск похожих ДО заведения — и до открытия транзакции: обращение к
@@ -914,7 +914,7 @@ pub async fn create(
                         return (
                             StatusCode::CONFLICT,
                             Json(json!({
-                                "error": "похоже, это уже заведено. Посмотрите список: если это та же работа — правьте существующий тикет; если нет — пришлите skip_search: true",
+                                "error": "this looks like it has already been filed. Read the list: if it is the same work, edit the existing ticket; if it is not, send skip_search: true",
                                 "similar": hits
                             })),
                         )
@@ -935,7 +935,7 @@ pub async fn create(
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     // Пределы длины — на ЗАПИСИ, единым местом для всех клиентов: CLI, локальный
@@ -955,7 +955,7 @@ pub async fn create(
         if module_is_archived(&tx, p.project.as_deref(), m).await {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("модуль {m} в архиве — выбрать его для новой работы нельзя")})),
+                Json(json!({"error": format!("module {m} is archived — it cannot be chosen for new work")})),
             )
                 .into_response();
         }
@@ -968,7 +968,7 @@ pub async fn create(
             .await
             .is_err()
         {
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     }
 
@@ -1006,7 +1006,7 @@ pub async fn create(
         Ok(0) => {
             return (
                 StatusCode::CONFLICT,
-                Json(json!({"error": "идентификатор занят", "id": id})),
+                Json(json!({"error": "that identifier is taken", "id": id})),
             )
                 .into_response()
         }
@@ -1041,7 +1041,7 @@ pub async fn create(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            return oops(code, "не удалось создать тикет: проверьте статус, приоритет, исполнителя, модуль и формат id");
+            return oops(code, "could not create the ticket: check the status, priority, assignee, module and the id format");
         }
     }
 
@@ -1060,13 +1060,13 @@ pub async fn create(
         {
             Ok(0) => missing.push(dep.clone()),
             Ok(_) => {}
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         }
     }
     if !missing.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("нет таких тикетов: {}", missing.join(", "))})),
+            Json(json!({"error": format!("no such tickets: {}", missing.join(", "))})),
         )
             .into_response();
     }
@@ -1075,10 +1075,10 @@ pub async fn create(
     // ними, тикет не окажется записанным без долга.
     if let Err(e) = enqueue_upsert(&tx, &id).await {
         tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     if tx.commit().await.is_err() {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, "тикет создан");
     // Будим слив ПОСЛЕ коммита: до него долга ещё нет, и будить нечего.
@@ -1105,14 +1105,14 @@ pub async fn deps(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     let Ok(Some(root)) = tx
         .query_opt("select id, title, status from tickets where lower(id) = lower($1) and deleted_at is null", &[&id])
         .await
     else {
-        return oops(StatusCode::NOT_FOUND, "такого тикета нет");
+        return oops(StatusCode::NOT_FOUND, "no such ticket");
     };
     let root_id: String = root.get(0);
 
@@ -1161,7 +1161,7 @@ pub async fn deps(
             }
             Err(e) => {
                 tracing::error!(error = %e, "не удалось обойти зависимости");
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         }
     }
@@ -1187,13 +1187,13 @@ pub async fn remove(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     // Идентификатор приводится к каноническому виду сразу после входа в
     // воркспейс: дальше все сравнения точные, и ни одно из них не надо помнить.
     let id = match canonical_id(&tx, &id).await {
         Some(v) => v,
-        None => return oops(StatusCode::NOT_FOUND, "такого тикета нет"),
+        None => return oops(StatusCode::NOT_FOUND, "no such ticket"),
     };
 
 
@@ -1208,7 +1208,7 @@ pub async fn remove(
         .await
     {
         Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     let affected = tx
@@ -1222,17 +1222,17 @@ pub async fn remove(
     if matches!(affected, Ok(n) if n > 0) {
         if let Err(e) = enqueue_delete(&tx, &id).await {
             tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг удаления не поставлен");
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     }
     match affected {
-        Ok(0) => oops(StatusCode::NOT_FOUND, "такого тикета нет или он уже удалён"),
+        Ok(0) => oops(StatusCode::NOT_FOUND, "no such ticket, or it is already removed"),
         Ok(_) if tx.commit().await.is_ok() => {
             tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, "тикет удалён");
             crate::vector::wake(&app);
             Json(json!({"id": id, "deleted": true, "still_waiting_on_it": waiting})).into_response()
         }
-        _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     }
 }
 
@@ -1280,13 +1280,13 @@ pub async fn meta(
             // Отказ называется вслух: пустой список означал бы «никого нет»,
             // а это другой ответ.
             tracing::error!(error = %e, workspace = %ws, "не удалось прочитать людей воркспейса");
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     let limits = tx
@@ -1415,7 +1415,7 @@ pub async fn set_modules(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     if tx
@@ -1425,7 +1425,7 @@ pub async fn set_modules(
         .flatten()
         .is_none()
     {
-        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+        return oops(StatusCode::NOT_FOUND, "no such project");
     }
 
     let wanted: Vec<String> = {
@@ -1442,7 +1442,7 @@ pub async fn set_modules(
         .await
     {
         Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     let removed: Vec<&String> = existing.iter().filter(|e| !wanted.contains(e)).collect();
@@ -1463,7 +1463,7 @@ pub async fn set_modules(
             .await
         {
             Ok(r) => r.get(0),
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         // Удалённые тикеты тоже считаются: их можно вернуть, и вернувшийся
         // тикет со ссылкой в пустоту — это та же потеря, только отложенная.
@@ -1481,11 +1481,11 @@ pub async fn set_modules(
             {
                 Ok(n) if n > 0 => archived.push((*m).clone()),
                 Ok(_) => {}
-                Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+                Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
             }
         } else {
             if tx.execute("delete from modules where project_id = $1 and name = $2", &[&project, m]).await.is_err() {
-                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
             deleted.push((*m).clone());
         }
@@ -1506,7 +1506,7 @@ pub async fn set_modules(
         match back {
             Ok(n) if n > 0 => restored.push(m.clone()),
             Ok(_) => {}
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         }
     }
 
@@ -1516,16 +1516,16 @@ pub async fn set_modules(
             .await
             .is_err()
         {
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     }
 
     if tx.commit().await.is_err() {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     tracing::info!(actor = %actor.user_id, project = %project, workspace = %ws,
                    added = added.len(), archived = archived.len(), deleted = deleted.len(),
-                   restored = restored.len(), "реестр модулей заменён");
+                   restored = restored.len(), "module registry replaced");
     Json(json!({
         "project": project,
         "total": wanted.len(),
@@ -1647,7 +1647,7 @@ pub async fn patch_project(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     if tx
@@ -1657,7 +1657,7 @@ pub async fn patch_project(
         .flatten()
         .is_none()
     {
-        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+        return oops(StatusCode::NOT_FOUND, "no such project");
     }
 
     if p.archived {
@@ -1666,14 +1666,14 @@ pub async fn patch_project(
             .await
         {
             Ok(r) => r.get(0),
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         if left > 0 {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
                     "error": format!(
-                        "в проекте {project} ещё {left} тикетов: перенесите их, иначе работа станет невидимой, оставшись живой"
+                        "project {project} still holds {left} tickets: move them, or the work stays alive while becoming invisible"
                     ),
                     "tickets": left
                 })),
@@ -1687,10 +1687,10 @@ pub async fn patch_project(
         .await
         .is_err()
     {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     if tx.commit().await.is_err() {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     Json(json!({ "project": project, "archived": p.archived })).into_response()
 }
@@ -1725,14 +1725,14 @@ pub async fn move_project(
     };
     let to = p.to.trim().to_string();
     if to.is_empty() {
-        return oops(StatusCode::BAD_REQUEST, "назовите целевой проект");
+        return oops(StatusCode::BAD_REQUEST, "name the target project");
     }
     if to == from {
-        return oops(StatusCode::BAD_REQUEST, "перенос в тот же проект ничего не значит");
+        return oops(StatusCode::BAD_REQUEST, "moving into the same project means nothing");
     }
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
 
     if tx
@@ -1742,7 +1742,7 @@ pub async fn move_project(
         .flatten()
         .is_none()
     {
-        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+        return oops(StatusCode::NOT_FOUND, "no such project");
     }
     if tx
         .execute(
@@ -1752,7 +1752,7 @@ pub async fn move_project(
         .await
         .is_err()
     {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
 
     // Модули считаем ДО записи: иначе внешний ключ на пару отвергнет перенос
@@ -1766,14 +1766,14 @@ pub async fn move_project(
         .await
     {
         Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     let target: Vec<String> = match tx
         .query("select name from modules where project_id = $1", &[&to])
         .await
     {
         Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     let missing = modules_missing_in_target(&source, &target);
     if !missing.is_empty() {
@@ -1781,7 +1781,7 @@ pub async fn move_project(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": format!(
-                    "в проекте {to} не заведены модули, на которые ссылаются переносимые тикеты: {}",
+                    "project {to} has no modules matching the ones the moved tickets reference: {}",
                     missing.join(", ")
                 ),
                 "missing_modules": missing
@@ -1795,10 +1795,10 @@ pub async fn move_project(
         .await
     {
         Ok(n) => n,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     if tx.commit().await.is_err() {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     Json(json!({ "from": from, "to": to, "moved": moved })).into_response()
 }
@@ -1923,12 +1923,12 @@ pub async fn add_modules(
             .collect()
     };
     if wanted.is_empty() {
-        return oops(StatusCode::BAD_REQUEST, "назовите хотя бы один модуль");
+        return oops(StatusCode::BAD_REQUEST, "name at least one module");
     }
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     if tx
         .query_opt("select 1 from projects where id = $1", &[&project])
@@ -1937,7 +1937,7 @@ pub async fn add_modules(
         .flatten()
         .is_none()
     {
-        return oops(StatusCode::NOT_FOUND, "такого проекта нет");
+        return oops(StatusCode::NOT_FOUND, "no such project");
     }
 
     let mut added: Vec<String> = Vec::new();
@@ -1951,7 +1951,7 @@ pub async fn add_modules(
             .await
         {
             Ok(r) => r.map(|row| row.get(0)),
-            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         match was {
             // Действует — делать нечего.
@@ -1966,7 +1966,7 @@ pub async fn add_modules(
                     .await
                     .is_err()
                 {
-                    return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                    return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
                 }
                 restored.push(m.clone());
             }
@@ -1979,14 +1979,14 @@ pub async fn add_modules(
                     .await
                     .is_err()
                 {
-                    return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+                    return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
                 }
                 added.push(m.clone());
             }
         }
     }
     if tx.commit().await.is_err() {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     // Ничего не удалено и не заархивировано — это свойство операции, и оно
     // названо в ответе, чтобы проверяющему не приходилось верить на слово.
@@ -2070,33 +2070,33 @@ pub(crate) async fn canonical_id(tx: &deadpool_postgres::Transaction<'_>, id: &s
 pub(crate) fn explain_constraint(err: &str) -> Option<String> {
     let m = |field: &str, hint: &str| Some(format!("{field}. {hint}"));
     if err.contains("tickets_assignee_fkey") {
-        return m("неизвестный исполнитель", "Допустимых перечисляет ntk meta.");
+        return m("unknown assignee", "ntk meta lists the ones allowed.");
     }
     if err.contains("tickets_status_fkey") {
-        return m("неизвестный статус", "Допустимые перечисляет ntk meta.");
+        return m("unknown status", "ntk meta lists the ones allowed.");
     }
     if err.contains("tickets_priority_fkey") {
-        return m("неизвестный приоритет", "Допустимые перечисляет ntk meta.");
+        return m("unknown priority", "ntk meta lists the ones allowed.");
     }
     if err.contains("tickets_project_id_fkey") {
-        return m("неизвестный проект", "Список даёт ntk meta.");
+        return m("unknown project", "ntk meta gives the list.");
     }
     if err.contains("tickets_module_fk") {
         // Ключ идёт на ПАРУ, поэтому имя модуля из чужого проекта тоже не
         // подойдёт — сказать это сразу дешевле, чем искать опечатку в имени.
         return m(
-            "модуль не заведён в этом проекте",
-            "Внешний ключ идёт на пару проект+модуль, поэтому имя из другого проекта не подойдёт. Действующие перечисляет ntk modules -P <проект>, завести новый — ntk modules -P <проект> --add.",
+            "that module is not registered in this project",
+            "The foreign key is on the pair project+module, so a name from another project will not do either. ntk modules -P <project> lists the live ones; ntk modules -P <project> --add registers a new one.",
         );
     }
     if err.contains("tickets_id_check") {
         return m(
-            "недопустимый идентификатор",
-            "Разрешены буквы, цифры, дефис и подчёркивание, от 3 до 64 символов.",
+            "invalid identifier",
+            "Letters, digits, hyphen and underscore are allowed, from 3 to 64 characters.",
         );
     }
     if err.contains("tickets_pkey") {
-        return m("такой идентификатор уже занят", "Идентификатор назначает сервер; присылать свой нужно только при переносе данных.");
+        return m("такой идентификатор уже занят", "The server assigns the identifier; send your own only when migrating data.");
     }
     None
 }
@@ -2110,13 +2110,13 @@ mod explain_tests {
     #[test]
     fn each_constraint_names_its_own_field() {
         for (err, want) in [
-            ("... violates foreign key constraint \"tickets_assignee_fkey\"", "исполнитель"),
-            ("... violates foreign key constraint \"tickets_module_fk\"", "модуль"),
-            ("... violates check constraint \"tickets_id_check\"", "идентификатор"),
-            ("... violates foreign key constraint \"tickets_status_fkey\"", "статус"),
+            ("... violates foreign key constraint \"tickets_assignee_fkey\"", "assignee"),
+            ("... violates foreign key constraint \"tickets_module_fk\"", "module"),
+            ("... violates check constraint \"tickets_id_check\"", "identifier"),
+            ("... violates foreign key constraint \"tickets_status_fkey\"", "status"),
         ] {
             let got = explain_constraint(err).unwrap_or_default();
-            assert!(got.contains(want), "для {err} ожидали упоминание {want}, получили {got:?}");
+            assert!(got.contains(want), "for {err} expected a mention of {want}, got {got:?}");
         }
     }
 
@@ -2148,12 +2148,12 @@ async fn write_limit(tx: &deadpool_postgres::Transaction<'_>, field: &str) -> Op
 /// разбиение на атомарные тикеты и есть цель предела.
 fn too_long(field: &str, got: usize, max: i32) -> String {
     let what = match field {
-        "title" => "заголовок",
-        _ => "тело",
+        "title" => "the title",
+        _ => "the body",
     };
     if field == "title" {
         return format!(
-            "{what} длиннее предела: {got} символов при {max}. Заголовок — одна строка о том, ЧТО сделать; подробности идут в тело."
+            "{what} is over the limit: {got} characters against {max}. A title is one line about WHAT to do; the detail belongs in the body."
         );
     }
     // Про вложения здесь НЕ говорим: ручки на сервисе есть, но ни один клиент
@@ -2161,9 +2161,9 @@ fn too_long(field: &str, got: usize, max: i32) -> String {
     // человека делать невозможное, да ещё и ссылался на флаг -i из прежнего
     // JS-клиента, которого в этом CLI нет.
     format!(
-        "{what} длиннее предела: {got} символов при {max}. Разбейте работу на отдельные тикеты \
-         и свяжите их через --deps: предел стоит затем, чтобы тикет читался целиком и \
-         оставался одной единицей работы."
+        "{what} is over the limit: {got} characters against {max}. Split the work into separate \
+         tickets and link them with --deps: the limit exists so a ticket can be read whole and \
+         stays one unit of work."
     )
 }
 

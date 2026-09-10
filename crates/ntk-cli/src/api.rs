@@ -111,10 +111,10 @@ impl Client {
             .post(format!("{}/device/start", self.base))
             .send()
             .await
-            .context("сервис недоступен")?
+            .context("the service is unavailable")?
             .json()
             .await
-            .context("ответ сервиса не разобрался")
+            .context("the service response did not parse")
     }
 
     /// Ждёт, пока человек пройдёт вход в браузере.
@@ -130,7 +130,7 @@ impl Client {
                 .json(&serde_json::json!({"code": code, "device_secret": secret}))
                 .send()
                 .await
-                .context("сервис недоступен")?;
+                .context("the service is unavailable")?;
             let status = r.status();
             let body: Poll = r.json().await.unwrap_or(Poll { key: None, error: None });
 
@@ -138,10 +138,10 @@ impl Client {
                 return Ok(k);
             }
             if status == reqwest::StatusCode::GONE {
-                bail!("{}", body.error.unwrap_or_else(|| "код просрочен".into()));
+                bail!("{}", body.error.unwrap_or_else(|| "the code has expired".into()));
             }
             if std::time::Instant::now() >= deadline {
-                bail!("вход не завершён за отведённое время — запустите ntk login заново");
+                bail!("the sign-in did not finish in time — run ntk login again");
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -152,9 +152,9 @@ impl Client {
         #[derive(Deserialize)]
         struct Me { user_id: String, #[serde(default)] workspaces: Vec<String> }
         let r = self.http.get(format!("{}/v1/me", self.base)).bearer_auth(key).send().await
-            .context("сервис недоступен")?;
-        if !r.status().is_success() { bail!("ключ не принят: {}", r.status()); }
-        let m: Me = r.json().await.context("ответ сервиса не разобрался")?;
+            .context("the service is unavailable")?;
+        if !r.status().is_success() { bail!("the key was not accepted: {}", r.status()); }
+        let m: Me = r.json().await.context("the service response did not parse")?;
         Ok((m.user_id, m.workspaces))
     }
 
@@ -188,9 +188,9 @@ impl Client {
                 ("offset", &offset.to_string()),
             ]);
         req = req.query(&filter_query(f));
-        let r = req.send().await.context("сервис недоступен")?;
+        let r = req.send().await.context("the service is unavailable")?;
         let code = r.status();
-        let w: Wrap = r.json().await.context("ответ сервиса не разобрался")?;
+        let w: Wrap = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", w.error.unwrap_or_else(|| code.to_string()));
         }
@@ -212,9 +212,9 @@ impl Client {
             .query(&[("workspace", workspace)])
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let w: Wrap = r.json().await.context("ответ сервиса не разобрался")?;
+        let w: Wrap = r.json().await.context("the service response did not parse")?;
         match w.ticket {
             Some(t) if code.is_success() => Ok(t),
             _ => bail!("{}", w.error.unwrap_or_else(|| code.to_string())),
@@ -252,7 +252,7 @@ impl Client {
         if f.has_module { req = req.query(&[("has_module", "true")]); }
         if let Some(v) = f.assignee { req = req.query(&[("assignee", v)]); }
         if f.dry_run { req = req.query(&[("dry_run", "true")]); }
-        let r = req.send().await.context("сервис недоступен")?;
+        let r = req.send().await.context("the service is unavailable")?;
         let code = r.status();
         // «Свободных нет» приходит как 204 с ПУСТЫМ телом, и разбирать его как
         // JSON нельзя: клиент отвечал «ответ сервиса не разобрался» вместо
@@ -261,7 +261,7 @@ impl Client {
         if code == reqwest::StatusCode::NO_CONTENT {
             return Ok(None);
         }
-        let body: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let body: serde_json::Value = r.json().await.context("the service response did not parse")?;
 
         if !code.is_success() {
             bail!("{}", body.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
@@ -289,9 +289,9 @@ impl Client {
             .json(body)
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if code == reqwest::StatusCode::CONFLICT {
             // Тем же кодом отвечают две разные вещи: «не подобрался свободный
             // идентификатор» и «похоже, это уже заведено». Различаем по списку
@@ -300,7 +300,7 @@ impl Client {
             if let Some(sim) = v.get("similar").and_then(|s| s.as_array()) {
                 bail!(
                     "{}\n{}",
-                    v.get("error").and_then(|e| e.as_str()).unwrap_or("похоже, это уже заведено"),
+                    v.get("error").and_then(|e| e.as_str()).unwrap_or("this looks like it has already been filed"),
                     render_similar(sim)
                 );
             }
@@ -331,9 +331,9 @@ impl Client {
             .json(&body)
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -377,9 +377,9 @@ impl Client {
             .bearer_auth(key)
             .query(&[("workspace", workspace), ("count", "true")]);
         req = req.query(&filter_query(f));
-        let r = req.send().await.context("сервис недоступен")?;
+        let r = req.send().await.context("the service is unavailable")?;
         let code = r.status();
-        let w: Wrap = r.json().await.context("ответ сервиса не разобрался")?;
+        let w: Wrap = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", w.error.unwrap_or_else(|| code.to_string()));
         }
@@ -408,9 +408,9 @@ impl Client {
         }
         req = req.query(&filter_query(f));
 
-        let r = req.send().await.context("сервис недоступен")?;
+        let r = req.send().await.context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -431,7 +431,7 @@ impl Client {
             .json(body)
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
         let v: serde_json::Value = r.json().await.unwrap_or_default();
         if !code.is_success() {
@@ -450,9 +450,9 @@ impl Client {
             .query(&[("workspace", workspace)])
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -473,9 +473,9 @@ impl Client {
             .query(&[("workspace", workspace)])
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -492,9 +492,9 @@ impl Client {
             .query(&[("workspace", workspace)])
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -513,9 +513,9 @@ impl Client {
             .query(&[("workspace", workspace)])
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -535,9 +535,9 @@ impl Client {
             .json(&serde_json::json!({ "workspace": workspace, "archived": archived }))
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -555,9 +555,9 @@ impl Client {
             .json(&serde_json::json!({ "workspace": workspace, "to": to }))
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -575,9 +575,9 @@ impl Client {
             .json(&serde_json::json!({ "workspace": workspace, "add": add }))
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }
@@ -594,9 +594,9 @@ impl Client {
             .json(&serde_json::json!({ "workspace": workspace, "modules": modules }))
             .send()
             .await
-            .context("сервис недоступен")?;
+            .context("the service is unavailable")?;
         let code = r.status();
-        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
         if !code.is_success() {
             bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
         }

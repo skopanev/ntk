@@ -62,14 +62,14 @@ impl Filters {
     /// too: name something else and a different walk begins.
     pub fn describe(&self) -> String {
         let mut p = Vec::new();
-        if let Some(v) = &self.status { p.push(format!("статус {v}")); }
-        if let Some(v) = &self.assignee { p.push(format!("исполнитель {v}")); }
-        if let Some(v) = &self.project { p.push(format!("проект {v}")); }
-        if let Some(v) = &self.module { p.push(format!("модуль {v}")); }
-        if let Some(v) = &self.tag { p.push(format!("тег {v}{}", if self.strict { " целиком" } else { "" })); }
+        if let Some(v) = &self.status { p.push(format!("status {v}")); }
+        if let Some(v) = &self.assignee { p.push(format!("assignee {v}")); }
+        if let Some(v) = &self.project { p.push(format!("project {v}")); }
+        if let Some(v) = &self.module { p.push(format!("module {v}")); }
+        if let Some(v) = &self.tag { p.push(format!("tag {v}{}", if self.strict { " exactly" } else { "" })); }
         if let Some(v) = &self.title { p.push(format!("заголовок «{v}»")); }
-        if self.all { p.push("все, не только свои".into()); }
-        if p.is_empty() { "без отбора".into() } else { p.join(", ") }
+        if self.all { p.push("everyone's, not just mine".into()); }
+        if p.is_empty() { "no filter".into() } else { p.join(", ") }
     }
 }
 

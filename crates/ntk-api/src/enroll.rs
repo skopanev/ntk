@@ -31,14 +31,14 @@ pub fn client_ip(h: &HeaderMap) -> String {
         .and_then(|v| v.split(',').next())
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "неизвестен".into())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub async fn start(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     let ip = client_ip(&headers);
     let s = device::generate();
     let Ok(c) = app.pool.get().await else {
-        return oops(StatusCode::SERVICE_UNAVAILABLE, "база недоступна");
+        return oops(StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable");
     };
 
     // Expired codes are not kept: they are useless and pile up forever.
@@ -71,7 +71,7 @@ pub async fn start(State(app): State<Arc<App>>, headers: HeaderMap) -> Response 
         if live > 20 {
             return oops(
                 StatusCode::TOO_MANY_REQUESTS,
-                "слишком много незавершённых входов с этого адреса — завершите начатый или подождите",
+                "too many unfinished sign-ins from this address — finish the one you started, or wait",
             );
         }
     }
@@ -84,8 +84,8 @@ pub async fn start(State(app): State<Arc<App>>, headers: HeaderMap) -> Response 
         )
         .await
     {
-        tracing::error!(error = %e, "не удалось завести код устройства");
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        tracing::error!(error = %e, "could not create a device code");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     Json(json!({
         "code": s.code,
@@ -106,7 +106,7 @@ pub struct PollBody {
 /// it is erased by the very query that reads it.
 pub async fn poll(State(app): State<Arc<App>>, Json(b): Json<PollBody>) -> Response {
     let Ok(c) = app.pool.get().await else {
-        return oops(StatusCode::SERVICE_UNAVAILABLE, "база недоступна");
+        return oops(StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable");
     };
     let code = device::normalize(&b.code);
 
@@ -148,7 +148,7 @@ pub async fn poll(State(app): State<Arc<App>>, Json(b): Json<PollBody>) -> Respo
             let key: Option<String> = r[0].get(1);
             match key {
                 Some(k) => Json(json!({"status": "ready", "key": k, "user_id": user})).into_response(),
-                None => oops(StatusCode::GONE, "ключ уже был забран"),
+                None => oops(StatusCode::GONE, "the key has already been collected"),
             }
         }
         Ok(_) => {
@@ -172,13 +172,13 @@ pub async fn poll(State(app): State<Arc<App>>, Json(b): Json<PollBody>) -> Respo
             } else {
                 oops(
                     StatusCode::GONE,
-                    "код просрочен, неизвестен или ключ уже забран — начните вход заново",
+                    "the code is expired or unknown, or the key was already collected — start the sign-in again",
                 )
             }
         }
         Err(e) => {
-            tracing::error!(error = %e, "опрос кода не прошёл");
-            oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")
+            tracing::error!(error = %e, "polling the code failed");
+            oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
 }
@@ -267,11 +267,11 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
         // Text from the address bar does not reach the page at all. The escaping
         // is already in place, but there is no reason to reflect somebody's
         // input: what is never reflected can never be fired.
-        tracing::warn!(error = %e, "Google отказал во входе");
-        return page("Вход не выполнен", "Google не подтвердил вход. Попробуйте ещё раз.");
+        tracing::warn!(error = %e, "Google refused the sign-in");
+        return page("Sign-in failed", "Google did not confirm the sign-in. Try again.");
     }
     let (Some(auth_code), Some(state)) = (q.code, q.state) else {
-        return page("Вход не выполнен", "Google не передал код или состояние.");
+        return page("Sign-in failed", "Google returned no code or state.");
     };
     let device_code = device::normalize(&state);
 
@@ -285,27 +285,27 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!(error = %e, "обмен кода не прошёл");
-            return page("Вход не выполнен", &e.to_string());
+            tracing::warn!(error = %e, "exchanging the code failed");
+            return page("Sign-in failed", &e.to_string());
         }
     };
 
     let ident = match oauth::verify_id_token(&id_token, &app.cfg.google_client_id, &app.cfg.google_hd).await {
         Ok(i) => i,
         Err(e) => {
-            tracing::warn!(error = %e, "токен не принят");
-            return page("Доступ не разрешён", &e.to_string());
+            tracing::warn!(error = %e, "the token was not accepted");
+            return page("Access denied", &e.to_string());
         }
     };
 
     let Ok(mut c) = app.pool.get().await else {
-        return page("Временная неполадка", "База недоступна, попробуйте позже.");
+        return page("Temporary failure", "The database is unavailable, try again later.");
     };
     match enroll(&mut c, &ident, &device_code).await {
         Ok(ws) => page(
-            "Готово",
+            "Done",
             &format!(
-                "Вы вошли как {}. Доступ: {}. Вернитесь в Claude — расширение заберёт ключ само.",
+                "You are signed in as {}. Access: {}. Go back to your client — it will collect the key itself.",
                 ident.email,
                 ws.join(", ")
             ),
@@ -313,8 +313,8 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
         Err(e) => {
             // The whole chain is printed: a bare "db error" with no cause cost us a
             // real person who got stuck and could not say what on.
-            tracing::warn!(error = ?e, email = %ident.email, "самозапись не прошла");
-            page("Доступ не разрешён", &format!("{e:#}"))
+            tracing::warn!(error = ?e, email = %ident.email, "enrolment failed");
+            page("Access denied", &format!("{e:#}"))
         }
     }
 }
@@ -344,7 +344,7 @@ async fn enroll(
         )
         .await?;
     if n == 0 {
-        anyhow::bail!("код устройства просрочен или уже использован — начните вход заново");
+        anyhow::bail!("the device code has expired or was already used — start the sign-in again");
     }
     tx.commit().await?;
     Ok(workspaces)

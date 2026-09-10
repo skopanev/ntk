@@ -42,12 +42,12 @@ pub async fn current(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>
     let Some(platform) = wanted(&q) else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error":"укажите platform — угадывать её нельзя, чужой бинарь ломает установку"})),
+            Json(json!({"error":"name a platform — it cannot be guessed, and the wrong binary breaks the installation"})),
         )
             .into_response();
     };
     let Ok(c) = app.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error":"база недоступна"}))).into_response();
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error":"the database is unavailable"}))).into_response();
     };
     let row = c
         .query_opt(
@@ -73,18 +73,18 @@ pub async fn current(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>
                 .into_response(),
                 Err(e) => {
                     tracing::error!(error = %e, "could not sign the release link");
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"внутренняя ошибка"}))).into_response()
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal error"}))).into_response()
                 }
             }
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(json!({"error": format!("для платформы {platform} выпусков нет")})),
+            Json(json!({"error": format!("there are no releases for platform {platform}")})),
         )
             .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "the release query failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"внутренняя ошибка"}))).into_response()
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal error"}))).into_response()
         }
     }
 }
@@ -97,10 +97,10 @@ pub async fn current(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>
 /// would read as "ask someone for the file".
 pub async fn download(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>) -> Response {
     let Some(platform) = wanted(&q) else {
-        return (StatusCode::BAD_REQUEST, "укажите platform, например ?platform=darwin-arm64").into_response();
+        return (StatusCode::BAD_REQUEST, "name a platform, e.g. ?platform=darwin-arm64").into_response();
     };
     let Ok(c) = app.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "база недоступна").into_response();
+        return (StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable").into_response();
     };
     let row = c
         .query_opt(
@@ -113,9 +113,9 @@ pub async fn download(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery
     match row {
         Ok(Some(r)) => match spaces::presign_get(&app.cfg, &r.get::<_, String>(0), 900) {
             Ok(url) => Redirect::temporary(&url).into_response(),
-            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка").into_response(),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response(),
         },
-        Ok(None) => (StatusCode::NOT_FOUND, "выпусков нет").into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка").into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "there are no releases").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response(),
     }
 }

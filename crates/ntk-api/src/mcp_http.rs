@@ -105,8 +105,8 @@ async fn body_text(r: Response) -> (bool, String) {
         Err(e) => (
             false,
             format!(
-                "ответ не поместился в {} МБ ({e}). Возьмите меньше за раз: \
-                 уменьшите limit или отберите по status и tag",
+                "the response did not fit in {} MB ({e}). Take less at a time: \
+                 lower limit, or narrow by status and tag",
                 MAX_BODY / (1024 * 1024)
             ),
         ),
@@ -226,12 +226,12 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             match name {
                 "ntk_close" => { p["status"] = json!("done"); }
                 "ntk_tag" => {
-                    let Some(e) = args.get("edits") else { return (false, "не указаны edits".into()) };
+                    let Some(e) = args.get("edits") else { return (false, "edits were not given".into()) };
                     p["tag_edits"] = e.clone();
                 }
                 "ntk_update" => {
                     if args.get("body").is_some() && args.get("body_append").is_some() {
-                        return (false, "body и body_append вместе не принимаются: либо заменить тело, либо дописать".into());
+                        return (false, "body and body_append are not accepted together: either replace the body or append to it".into());
                     }
                     // module и project здесь же, а не отдельным вызовом: сервер
                     // меняет всё одной транзакцией, а два вызова оставляют тикет
@@ -267,7 +267,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                         return (false, "dep_set replaces the whole set — signs do not belong here; use dep_edits to edit".into());
                     }
                 }
-                other => return (false, format!("{other} в группе, но ветки для него нет")),
+                other => return (false, format!("{other} is in the group but has no branch")),
             }
             // Знак у каждой правки обязателен, и проверяем его ДО записи:
             // «добавить», понятое как «заменить всё», стирает историю пометок
@@ -276,7 +276,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                 for e in edits {
                     let t = e.as_str().unwrap_or("");
                     if !t.starts_with('+') && !t.starts_with('-') {
-                        return (false, format!("тег «{t}» без знака: нужен + или -"));
+                        return (false, format!("tag {t:?} has no sign: use + or -"));
                     }
                 }
             }
@@ -290,7 +290,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
         "ntk_deps" | "ntk_rm" | "ntk_meta" => {
             let uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
             let Ok(Query(qq)) = Query::try_from_uri(&uri.parse().unwrap()) else {
-                return (false, "не указан воркспейс".into());
+                return (false, "no workspace given".into());
             };
             // Исчерпывающе, без `_`: имя, добавленное в группу и забытое
             // здесь, иначе молча ответило бы ЧУЖОЙ веткой — успешным
@@ -300,7 +300,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                 "ntk_deps" => body_text(write::deps(st, h, Path(id), Query(qq)).await).await,
                 "ntk_rm" => body_text(write::remove(st, h, Path(id), Query(qq)).await).await,
                 "ntk_meta" => body_text(write::meta(st, h, Query(qq)).await).await,
-                other => (false, format!("{other} в группе, но ветки для него нет")),
+                other => (false, format!("{other} is in the group but has no branch")),
             }
         }
 
@@ -402,11 +402,11 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                 },
                 // Не `else`: замена стирает то, чего нет в списке, и попасть в
                 // неё по недосмотру — самая дорогая ошибка в этом файле.
-                other => (false, format!("{other} в группе, но ветки для него нет")),
+                other => (false, format!("{other} is in the group but has no branch")),
             }
         }
 
-        other => (false, format!("инструмента {other} нет")),
+        other => (false, format!("no tool named {other}")),
     }
 }
 
@@ -420,7 +420,7 @@ pub async fn endpoint(State(app): State<Arc<App>>, headers: HeaderMap, body: Str
     let base = app.cfg.public_url.clone();
     let msg: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
-        Err(e) => return rpc_error(Value::Null, -32700, &format!("разбор не удался: {e}")),
+        Err(e) => return rpc_error(Value::Null, -32700, &format!("parsing failed: {e}")),
     };
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or_default();
@@ -435,7 +435,7 @@ pub async fn endpoint(State(app): State<Arc<App>>, headers: HeaderMap, body: Str
                 tracing::info!(sid, "mcp: сессия под прежний набор — прекращаю");
                 return (
                     StatusCode::NOT_FOUND,
-                    Json(json!({"error": "сессия прекращена: набор инструментов изменился"})),
+                    Json(json!({"error": "session terminated: the tool set has changed"})),
                 )
                     .into_response();
             }
@@ -451,7 +451,7 @@ pub async fn endpoint(State(app): State<Arc<App>>, headers: HeaderMap, body: Str
     // подключиться предлагалось вообще без входа. Спецификация требует того же
     // прямо: заголовок обязателен в каждом запросе, даже внутри одной сессии.
     let Some(token) = auth::bearer(&headers) else {
-        return mcp_oauth::unauthorized(&base, "нужен заголовок Authorization: Bearer");
+        return mcp_oauth::unauthorized(&base, "an Authorization: Bearer header is required");
     };
     if let Err(e) = check_audience(&app, token, &base).await {
         return mcp_oauth::unauthorized(&base, &e.to_string());
@@ -527,7 +527,7 @@ pub async fn endpoint(State(app): State<Arc<App>>, headers: HeaderMap, body: Str
                 rpc_ok_with_notice(id, result)
             }
         }
-        other => rpc_error(id, -32601, &format!("метод {other} не поддерживается")),
+        other => rpc_error(id, -32601, &format!("method {other} is not supported")),
     }
 }
 
@@ -551,13 +551,13 @@ async fn check_audience(app: &Arc<App>, token: &str, base: &str) -> anyhow::Resu
         )
         .await?;
     let Some(r) = row else {
-        anyhow::bail!("токен неизвестен или просрочен");
+        anyhow::bail!("unknown or expired token");
     };
     if let Some(res) = r.get::<_, Option<String>>(0) {
         let want = mcp_oauth::resource_url(base);
         let norm = |s: &str| s.trim_end_matches('/').to_ascii_lowercase();
         if norm(&res) != norm(&want) && norm(&res) != norm(base) {
-            anyhow::bail!("токен выпущен для другого ресурса: {res}");
+            anyhow::bail!("the token was issued for a different resource: {res}");
         }
     }
     Ok(())
@@ -610,7 +610,7 @@ pub async fn endpoint_get(State(app): State<Arc<App>>, headers: HeaderMap) -> Re
     let base = app.cfg.public_url.clone();
     tracing::info!("mcp: открыт поток уведомлений");
     let Some(token) = auth::bearer(&headers) else {
-        return mcp_oauth::unauthorized(&base, "нужен заголовок Authorization: Bearer");
+        return mcp_oauth::unauthorized(&base, "an Authorization: Bearer header is required");
     };
     if let Err(e) = check_audience(&app, token, &base).await {
         return mcp_oauth::unauthorized(&base, &e.to_string());

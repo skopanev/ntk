@@ -669,7 +669,7 @@ async fn one(
     // дало бы гарантированный дедлок пула — мина ровно на «подниму
     // параллельность».
     let read = {
-        let mut client = pool.get().await.context("база недоступна")?;
+        let mut client = pool.get().await.context("the database is unavailable")?;
         let tx = crate::db::begin(&mut client, ws).await?;
         let row = tx
             .query_opt(
@@ -838,7 +838,7 @@ async fn clear_debt(pool: &deadpool_postgres::Pool, ws: &str, id: &str) -> Resul
 /// находит». Это разные вещи: первое даёт ноль обращений к базе воркспейса,
 /// второе оставляет путь, по которому однажды что-нибудь просочится.
 pub async fn enabled_workspaces(pool: &deadpool_postgres::Pool) -> Result<Vec<String>> {
-    let client = pool.get().await.context("база недоступна")?;
+    let client = pool.get().await.context("the database is unavailable")?;
     let rows = client
         .query("select name from core.workspaces order by name", &[])
         .await?;

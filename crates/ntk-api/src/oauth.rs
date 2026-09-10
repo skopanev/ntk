@@ -107,18 +107,18 @@ pub async fn verify_id_token(
     client_id: &str,
     allowed_domains: &[String],
 ) -> Result<Identity> {
-    let header = decode_header(id_token).context("заголовок токена не разобрался")?;
+    let header = decode_header(id_token).context("the token header did not parse")?;
     if header.alg != Algorithm::RS256 {
-        bail!("неожиданный алгоритм подписи: {:?}", header.alg);
+        bail!("unexpected signature algorithm: {:?}", header.alg);
     }
-    let kid = header.kid.context("в токене нет kid")?;
+    let kid = header.kid.context("the token carries no kid")?;
 
     let jwks: Jwks = reqwest::get(JWKS_URL).await?.json().await.context("JWKS не разобрался")?;
     let jwk = jwks
         .keys
         .iter()
         .find(|k| k.kid == kid)
-        .context("ключ подписи не найден среди ключей Google")?;
+        .context("the signing key is not among Google's keys")?;
 
     let mut v = Validation::new(Algorithm::RS256);
     v.set_audience(&[client_id]);
@@ -127,16 +127,16 @@ pub async fn verify_id_token(
     v.validate_exp = true;
 
     let data = decode::<Identity>(id_token, &DecodingKey::from_rsa_components(&jwk.n, &jwk.e)?, &v)
-        .context("токен не прошёл проверку подписи или полей")?;
+        .context("the token failed signature or claim validation")?;
     let ident = data.claims;
 
     if !ident.email_verified {
-        bail!("адрес {} не подтверждён у Google", ident.email);
+        bail!("the address {} is not verified with Google", ident.email);
     }
     match ident.hd.as_deref() {
         Some(hd) if allowed_domains.iter().any(|d| d == hd) => {}
-        Some(hd) => bail!("домен {hd} не в списке разрешённых"),
-        None => bail!("это личный аккаунт Google, а не рабочий: входить надо аккаунтом организации"),
+        Some(hd) => bail!("the domain {hd} is not on the allowed list"),
+        None => bail!("this is a personal Google account, not a workspace one: sign in with your organisation account"),
     }
     Ok(ident)
 }

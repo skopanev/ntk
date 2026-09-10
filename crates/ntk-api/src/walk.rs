@@ -80,24 +80,24 @@ pub async fn step(
     Query(q): Query<WalkQuery>,
 ) -> Response {
     let Some(key) = auth::bearer(&headers) else {
-        return err(StatusCode::UNAUTHORIZED, "нужен заголовок Authorization: Bearer");
+        return err(StatusCode::UNAUTHORIZED, "an Authorization: Bearer header is required");
     };
     let Ok(mut client) = app.pool.get().await else {
-        return err(StatusCode::SERVICE_UNAVAILABLE, "база недоступна");
+        return err(StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable");
     };
     let actor = match auth::resolve(&client, key).await {
         Ok(Some(a)) => a,
-        Ok(None) => return err(StatusCode::UNAUTHORIZED, "ключ неизвестен или отозван"),
+        Ok(None) => return err(StatusCode::UNAUTHORIZED, "unknown or revoked key"),
         Err(e) => {
             tracing::error!(error = %e, "не удалось разрешить ключ");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
     let Some(ws) = q.workspace.clone() else {
-        return err(StatusCode::BAD_REQUEST, "укажите workspace — значения по умолчанию нет");
+        return err(StatusCode::BAD_REQUEST, "name a workspace — there is no default");
     };
     if !actor.may_enter(&ws) {
-        return err(StatusCode::FORBIDDEN, "ключ не даёт доступа к этому воркспейсу");
+        return err(StatusCode::FORBIDDEN, "this key gives no access to that workspace");
     }
 
     let f = q.filters();
@@ -118,7 +118,7 @@ pub async fn step(
             .await
         {
             tracing::error!(error = %e, "сброс обхода не прошёл");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     }
     // Abandoned walks are cleared right here rather than by a scheduled job: a
@@ -146,7 +146,7 @@ pub async fn step(
         .await
     {
         tracing::error!(error = %e, "сеанс обхода не завёлся");
-        return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
     let seen: Vec<String> = match client
         .query_opt(
@@ -156,10 +156,10 @@ pub async fn step(
         .await
     {
         Ok(Some(r)) => r.get(0),
-        Ok(None) => return err(StatusCode::FORBIDDEN, "этот обход принадлежит другому"),
+        Ok(None) => return err(StatusCode::FORBIDDEN, "this walk belongs to somebody else"),
         Err(e) => {
             tracing::error!(error = %e, "чтение обхода не прошло");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -168,7 +168,7 @@ pub async fn step(
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "не удалось войти в воркспейс");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -179,7 +179,7 @@ pub async fn step(
         Ok(r) => r.get(0),
         Err(e) => {
             tracing::error!(error = %e, "счёт для обхода не прошёл");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
 
@@ -203,7 +203,7 @@ pub async fn step(
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "шаг обхода не прошёл");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
     let _ = tx.commit().await;
@@ -216,7 +216,7 @@ pub async fn step(
                 "seen": seen.len(),
                 "total": total,
                 "what": what,
-                "hint": "обход пройден; начать заново — reset"
+                "hint": "the walk is finished; reset to start over"
             })),
         )
             .into_response();
@@ -262,14 +262,14 @@ pub async fn step(
         Ok(0) => {
             return (
                 StatusCode::CONFLICT,
-                Json(json!({"error": "этот тикет только что взял другой обход с тем же walk_id — повторите шаг"})),
+                Json(json!({"error": "another walk with the same walk_id just took this ticket — repeat the step"})),
             )
                 .into_response()
         }
         Ok(_) => {}
         Err(e) => {
             tracing::error!(error = %e, "отметка обхода не записалась");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     }
 

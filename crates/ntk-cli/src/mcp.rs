@@ -433,7 +433,7 @@ impl Ntk {
 
         match c.create(&key, &a.workspace, &body).await.map_err(oops)? {
             Some(id) => Ok(CallToolResult::success(vec![Content::text(id)])),
-            None => Err(oops("сервер не смог подобрать свободный идентификатор")),
+            None => Err(oops("the server could not find a free identifier")),
         }
     }
 
@@ -444,7 +444,7 @@ impl Ntk {
         if let Some(v) = a.status { body["status"] = v.into(); }
         if let Some(v) = a.title { body["title"] = v.into(); }
         if a.body.is_some() && a.body_append.is_some() {
-            return Err(oops("body и body_append вместе не принимаются: либо заменить тело, либо дописать"));
+            return Err(oops("body and body_append are not accepted together: either replace the body or append to it"));
         }
         if let Some(v) = a.body { body["body"] = v.into(); }
         if let Some(v) = a.body_append { body["body_append"] = v.into(); }
@@ -453,7 +453,7 @@ impl Ntk {
         if let Some(t) = a.tag_edits {
             for e in &t {
                 if !e.starts_with('+') && !e.starts_with('-') {
-                    return Err(oops(format!("тег «{e}» без знака: нужен + или -")));
+                    return Err(oops(format!("tag {e:?} has no sign: use + or -")));
                 }
             }
             body["tag_edits"] = t.into();
@@ -462,7 +462,7 @@ impl Ntk {
             for e in &d {
                 if !e.starts_with('+') && !e.starts_with('-') {
                     return Err(oops(format!(
-                        "зависимость «{e}» без знака: нужен + (начать ждать) или - (перестать)"
+                        "dependency {e:?} has no sign: use + (start waiting) or - (stop)"
                     )));
                 }
             }
@@ -470,7 +470,7 @@ impl Ntk {
         }
         if let Some(d) = a.dep_set {
             if d.iter().any(|e| e.starts_with('+') || e.starts_with('-')) {
-                return Err(oops("dep_set заменяет набор целиком — знаки здесь не нужны; для правки есть dep_edits"));
+                return Err(oops("dep_set replaces the whole set — signs do not belong here; use dep_edits to edit"));
             }
             body["dep_set"] = d.into();
         }
@@ -480,7 +480,7 @@ impl Ntk {
         if let Some(v) = a.due { body["due"] = v.into(); }
         if a.force.unwrap_or(false) { body["force"] = true.into(); }
         c.patch(&key, &a.workspace, &a.id, &body).await.map_err(oops)?;
-        Ok(CallToolResult::success(vec![Content::text(format!("{} изменён", a.id))]))
+        Ok(CallToolResult::success(vec![Content::text(format!("{} changed", a.id))]))
     }
 
     #[tool]
@@ -501,7 +501,7 @@ impl Ntk {
             body["force"] = true.into();
         }
         c.patch(&key, &a.workspace, &a.id, &body).await.map_err(oops)?;
-        Ok(CallToolResult::success(vec![Content::text(format!("{} закрыт", a.id))]))
+        Ok(CallToolResult::success(vec![Content::text(format!("{} closed", a.id))]))
     }
 
     #[tool]
@@ -516,9 +516,9 @@ impl Ntk {
         let (c, key) = Self::client().await?;
         let blocked = c.remove(&key, &a.workspace, &a.id).await.map_err(oops)?;
         let msg = if blocked.is_empty() {
-            format!("{} убран", a.id)
+            format!("{} removed", a.id)
         } else {
-            format!("{} убран; на нём стояли: {}", a.id, blocked.join(", "))
+            format!("{} removed; it was waited on by: {}", a.id, blocked.join(", "))
         };
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -526,10 +526,10 @@ impl Ntk {
     #[tool]
     async fn ntk_similar(&self, Parameters(a): Parameters<SimilarArgs>) -> Result<CallToolResult, McpError> {
         if a.id.is_some() && (a.title.is_some() || a.body.is_some()) {
-            return Err(oops("либо id, либо текст: вместе не принимаются"));
+            return Err(oops("either id or text: not both"));
         }
         if a.id.is_none() && a.title.is_none() && a.body.is_none() {
-            return Err(oops("нужен текст или id тикета"));
+            return Err(oops("give text or a ticket id"));
         }
         let (c, key) = Self::client().await?;
         let mut req = serde_json::json!({});
@@ -569,7 +569,7 @@ impl Ntk {
     #[tool]
     async fn ntk_modules_add(&self, Parameters(a): Parameters<ModulesAddArgs>) -> Result<CallToolResult, McpError> {
         if a.add.is_empty() {
-            return Err(oops("назовите хотя бы один модуль"));
+            return Err(oops("name at least one module"));
         }
         let (c, key) = Self::client().await?;
         let v = c.add_modules(&key, &a.workspace, &a.project, &a.add).await.map_err(oops)?;
@@ -581,7 +581,7 @@ impl Ntk {
         if a.modules.is_empty() {
             // Пустой список стёр бы реестр проекта. Через MCP это стоит одного
             // недостающего аргумента, поэтому отказ, а не исполнение.
-            return Err(oops("пустой список стёр бы весь реестр проекта: пришлите хотя бы один модуль"));
+            return Err(oops("an empty list would wipe the project's whole registry: send at least one module"));
         }
         let (c, key) = Self::client().await?;
         let v = c.replace_modules(&key, &a.workspace, &a.project, &a.modules).await.map_err(oops)?;
@@ -592,7 +592,7 @@ impl Ntk {
     async fn ntk_tag(&self, Parameters(a): Parameters<TagArgs>) -> Result<CallToolResult, McpError> {
         for t in &a.edits {
             if !t.starts_with('+') && !t.starts_with('-') {
-                return Err(oops(format!("тег «{t}» без знака: нужен + или -")));
+                return Err(oops(format!("tag {t:?} has no sign: use + or -")));
             }
         }
         let (c, key) = Self::client().await?;
@@ -601,7 +601,7 @@ impl Ntk {
             body["force"] = true.into();
         }
         c.patch(&key, &a.workspace, &a.id, &body).await.map_err(oops)?;
-        Ok(CallToolResult::success(vec![Content::text(format!("теги {} изменены", a.id))]))
+        Ok(CallToolResult::success(vec![Content::text(format!("tags on {} changed", a.id))]))
     }
 
 }

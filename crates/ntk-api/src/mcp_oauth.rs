@@ -101,7 +101,7 @@ pub async fn register(
     Json(r): Json<Registration>,
 ) -> Response {
     if r.redirect_uris.is_empty() {
-        return bad("invalid_redirect_uri", "не указан ни один redirect_uri");
+        return bad("invalid_redirect_uri", "no redirect_uri was given");
     }
     // An open redirect is a way to walk off with an authorisation code. Only
     // https and localhost are allowed, as the specification requires.
@@ -110,11 +110,11 @@ pub async fn register(
             || u.starts_with("http://localhost")
             || u.starts_with("http://127.0.0.1");
         if !ok {
-            return bad("invalid_redirect_uri", &format!("{u} — нужен https или localhost"));
+            return bad("invalid_redirect_uri", &format!("{u} — https or localhost is required"));
         }
     }
     let Ok(c) = app.pool.get().await else {
-        return bad("temporarily_unavailable", "база недоступна");
+        return bad("temporarily_unavailable", "the database is unavailable");
     };
     let client_id = format!("ntkc_{}", rnd(24));
     let ip = crate::enroll::client_ip(&headers);
@@ -126,8 +126,8 @@ pub async fn register(
         )
         .await
     {
-        tracing::error!(error = %e, "регистрация клиента не прошла");
-        return bad("server_error", "не удалось зарегистрировать клиента");
+        tracing::error!(error = %e, "client registration failed");
+        return bad("server_error", "could not register the client");
     }
     (
         StatusCode::CREATED,
@@ -166,17 +166,17 @@ pub struct AuthorizeQuery {
 /// Step 1: the client sent a person. We check the client and hand the person to Google.
 pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQuery>) -> Response {
     if q.response_type != "code" {
-        return bad("unsupported_response_type", "поддерживается только code");
+        return bad("unsupported_response_type", "only code is supported");
     }
     let (Some(challenge), Some(method)) = (q.code_challenge.as_ref(), q.code_challenge_method.as_ref())
     else {
-        return bad("invalid_request", "PKCE обязателен: нужны code_challenge и code_challenge_method");
+        return bad("invalid_request", "PKCE is required: code_challenge and code_challenge_method must be present");
     };
     if method != "S256" {
-        return bad("invalid_request", "code_challenge_method должен быть S256");
+        return bad("invalid_request", "code_challenge_method must be S256");
     }
     let Ok(c) = app.pool.get().await else {
-        return bad("temporarily_unavailable", "база недоступна");
+        return bad("temporarily_unavailable", "the database is unavailable");
     };
     // An exact redirect_uri match, not a prefix: a prefix is an open redirect
     // with one extra step.
@@ -188,10 +188,10 @@ pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQue
         .await;
     match known {
         Ok(Some(_)) => {}
-        Ok(None) => return bad("invalid_client", "клиент не зарегистрирован или redirect_uri не совпадает"),
+        Ok(None) => return bad("invalid_client", "the client is not registered, or redirect_uri does not match"),
         Err(e) => {
-            tracing::error!(error = %e, "проверка клиента не прошла");
-            return bad("server_error", "внутренняя ошибка");
+            tracing::error!(error = %e, "the client check failed");
+            return bad("server_error", "internal error");
         }
     }
 
@@ -205,8 +205,8 @@ pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQue
         )
         .await
     {
-        tracing::error!(error = %e, "состояние входа не записалось");
-        return bad("server_error", "внутренняя ошибка");
+        tracing::error!(error = %e, "the sign-in state was not recorded");
+        return bad("server_error", "internal error");
     }
 
     // The Google callback is a separate address: for the device sign-in the
@@ -230,14 +230,14 @@ pub struct CallbackQuery {
 /// Step 2: Google sent the person back. We identify, enrol and issue a code.
 pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery>) -> Response {
     if q.error.is_some() {
-        return crate::enroll::plain_page("Вход не выполнен", "Google не подтвердил вход.");
+        return crate::enroll::plain_page("Sign-in failed", "Google did not confirm the sign-in.");
     }
     let (Some(auth_code), Some(state)) = (q.code, q.state) else {
-        return crate::enroll::plain_page("Вход не выполнен", "Google не передал код или состояние.");
+        return crate::enroll::plain_page("Sign-in failed", "Google returned no code or state.");
     };
 
     let Ok(mut c) = app.pool.get().await else {
-        return crate::enroll::plain_page("Временная неполадка", "База недоступна, попробуйте позже.");
+        return crate::enroll::plain_page("Temporary failure", "The database is unavailable, try again later.");
     };
     // The state is collected exactly once: the row is deleted by the same
     // query that reads it. Otherwise one Google callback is exchanged twice.
@@ -249,7 +249,7 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
         )
         .await;
     let Ok(Some(st)) = row else {
-        return crate::enroll::plain_page("Вход не выполнен", "Ссылка входа устарела — начните заново.");
+        return crate::enroll::plain_page("Sign-in failed", "The sign-in link has expired — start again.");
     };
     let (client_id, redirect_uri): (String, String) = (st.get(0), st.get(1));
     let (challenge, client_state): (String, Option<String>) = (st.get(2), st.get(3));
@@ -265,13 +265,13 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!(error = %e, "обмен кода Google не прошёл");
-            return crate::enroll::plain_page("Вход не выполнен", &e.to_string());
+            tracing::warn!(error = %e, "exchanging the Google code failed");
+            return crate::enroll::plain_page("Sign-in failed", &e.to_string());
         }
     };
     let ident = match oauth::verify_id_token(&id_token, &app.cfg.google_client_id, &app.cfg.google_hd).await {
         Ok(i) => i,
-        Err(e) => return crate::enroll::plain_page("Доступ не разрешён", &e.to_string()),
+        Err(e) => return crate::enroll::plain_page("Access denied", &e.to_string()),
     };
 
     let code = format!("ntkac_{}", rnd(32));
@@ -290,8 +290,8 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     }
     .await;
     if let Err(e) = issued {
-        tracing::warn!(error = ?e, email = %ident.email, "выдача кода не прошла");
-        return crate::enroll::plain_page("Доступ не разрешён", &format!("{e:#}"));
+        tracing::warn!(error = ?e, email = %ident.email, "issuing the code failed");
+        return crate::enroll::plain_page("Access denied", &format!("{e:#}"));
     }
 
     let sep = if redirect_uri.contains('?') { '&' } else { '?' };
@@ -315,13 +315,13 @@ pub struct TokenForm {
 /// Step 3: exchanging the code for a token. The code is one-shot and the PKCE check is mandatory.
 pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Response {
     let Ok(mut c) = app.pool.get().await else {
-        return bad("temporarily_unavailable", "база недоступна");
+        return bad("temporarily_unavailable", "the database is unavailable");
     };
 
     let (client_id, user_id, resource, scope) = match f.grant_type.as_str() {
         "authorization_code" => {
             let (Some(code), Some(verifier)) = (f.code.as_ref(), f.code_verifier.as_ref()) else {
-                return bad("invalid_request", "нужны code и code_verifier");
+                return bad("invalid_request", "code and code_verifier are required");
             };
             // The code is burnt by the same query that reads it: there is no
             // window between "read" and "marked used", so a second exchange
@@ -335,26 +335,26 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
                 )
                 .await;
             let Ok(Some(r)) = row else {
-                return bad("invalid_grant", "код неизвестен, просрочен или уже использован");
+                return bad("invalid_grant", "the code is unknown, expired or already used");
             };
             let (cid, uid): (String, String) = (r.get(0), r.get(1));
             let (redir, challenge): (String, String) = (r.get(2), r.get(3));
             if f.client_id.as_deref() != Some(cid.as_str()) {
-                return bad("invalid_grant", "код выдан другому клиенту");
+                return bad("invalid_grant", "the code was issued to a different client");
             }
             if f.redirect_uri.as_deref() != Some(redir.as_str()) {
-                return bad("invalid_grant", "redirect_uri не совпадает с тем, для которого выдан код");
+                return bad("invalid_grant", "redirect_uri does not match the one the code was issued for");
             }
             // S256: base64url(sha256(verifier)) without padding.
             let expect = base64_url(&Sha256::digest(verifier.as_bytes()));
             if expect != challenge {
-                return bad("invalid_grant", "проверка PKCE не прошла");
+                return bad("invalid_grant", "the PKCE check failed");
             }
             (cid, uid, r.get::<_, Option<String>>(4), r.get::<_, Option<String>>(5))
         }
         "refresh_token" => {
             let Some(rt) = f.refresh_token.as_ref() else {
-                return bad("invalid_request", "нужен refresh_token");
+                return bad("invalid_request", "a refresh_token is required");
             };
             let row = c
                 .query_opt(
@@ -365,11 +365,11 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
                 )
                 .await;
             let Ok(Some(r)) = row else {
-                return bad("invalid_grant", "refresh_token неизвестен или отозван");
+                return bad("invalid_grant", "unknown or revoked refresh_token");
             };
             (r.get(0), r.get(1), r.get::<_, Option<String>>(2), None)
         }
-        other => return bad("unsupported_grant_type", &format!("{other} не поддерживается")),
+        other => return bad("unsupported_grant_type", &format!("{other} is not supported")),
     };
 
     let access = format!("ntkat_{}", rnd(40));
@@ -394,8 +394,8 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
     }
     .await;
     if let Err(e) = put {
-        tracing::error!(error = ?e, "выдача токена не прошла");
-        return bad("server_error", "не удалось выдать токен");
+        tracing::error!(error = ?e, "issuing the token failed");
+        return bad("server_error", "could not issue a token");
     }
 
     Json(json!({

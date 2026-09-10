@@ -30,19 +30,19 @@ async fn enter(
     workspace: Option<&str>,
 ) -> Result<(deadpool_postgres::Client, auth::Actor, String), Response> {
     let Some(key) = auth::bearer(headers) else {
-        return Err(oops(StatusCode::UNAUTHORIZED, "нужен заголовок Authorization: Bearer"));
+        return Err(oops(StatusCode::UNAUTHORIZED, "an Authorization: Bearer header is required"));
     };
-    let client = app.pool.get().await.map_err(|_| oops(StatusCode::SERVICE_UNAVAILABLE, "база недоступна"))?;
+    let client = app.pool.get().await.map_err(|_| oops(StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable"))?;
     let actor = match auth::resolve(&client, key).await {
         Ok(Some(a)) => a,
-        Ok(None) => return Err(oops(StatusCode::UNAUTHORIZED, "ключ неизвестен или отозван")),
-        Err(_) => return Err(oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")),
+        Ok(None) => return Err(oops(StatusCode::UNAUTHORIZED, "unknown or revoked key")),
+        Err(_) => return Err(oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
     };
     let Some(ws) = workspace else {
-        return Err(oops(StatusCode::BAD_REQUEST, "укажите workspace — значения по умолчанию нет"));
+        return Err(oops(StatusCode::BAD_REQUEST, "name a workspace — there is no default"));
     };
     if !actor.may_enter(ws) {
-        return Err(oops(StatusCode::FORBIDDEN, "ключ не даёт доступа к этому воркспейсу"));
+        return Err(oops(StatusCode::FORBIDDEN, "this key gives no access to that workspace"));
     }
     Ok((client, actor, ws.to_string()))
 }
@@ -67,7 +67,7 @@ pub async fn begin(
         Err(r) => return r,
     };
     if a.size_bytes <= 0 || a.size_bytes > 50 * 1024 * 1024 {
-        return oops(StatusCode::BAD_REQUEST, "размер вне допустимого: от 1 байта до 50 МБ");
+        return oops(StatusCode::BAD_REQUEST, "size out of range: from 1 byte to 50 MB");
     }
     // The file name does not go into the key as given: dots, slashes and
     // directory traversal would ride straight into the signature. The name is
@@ -81,7 +81,7 @@ pub async fn begin(
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     // deleted_at is required: a removed ticket must not accept attachments.
     // Without this condition one could get an upload link for a deleted one.
@@ -92,7 +92,7 @@ pub async fn begin(
         .flatten()
         .is_none()
     {
-        return oops(StatusCode::NOT_FOUND, "такого тикета нет");
+        return oops(StatusCode::NOT_FOUND, "no such ticket");
     }
     let uniq: String = {
         use rand::Rng;
@@ -108,8 +108,8 @@ pub async fn begin(
         }))
         .into_response(),
         Err(e) => {
-            tracing::error!(error = %e, "не удалось подписать ссылку на загрузку");
-            oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка")
+            tracing::error!(error = %e, "could not sign the upload link");
+            oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
 }
@@ -138,19 +138,19 @@ pub async fn commit(
     // a client could attach someone else's object and call it its own.
     let prefix = format!("attachments/{ws}/{ticket}/");
     if !d.object_key.starts_with(&prefix) {
-        return oops(StatusCode::BAD_REQUEST, "ключ объекта не принадлежит этому тикету");
+        return oops(StatusCode::BAD_REQUEST, "that object key does not belong to this ticket");
     }
 
     let head = match spaces::presign_head(&app.cfg, &d.object_key, 60) {
         Ok(u) => reqwest::Client::new().head(u).send().await,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     let (size, etag) = match head {
         Ok(r) if r.status().is_success() => (
             r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
             r.headers().get("etag").and_then(|v| v.to_str().ok()).map(|v| v.trim_matches('"').to_string()),
         ),
-        _ => return oops(StatusCode::BAD_REQUEST, "объекта нет в хранилище — загрузка не состоялась"),
+        _ => return oops(StatusCode::BAD_REQUEST, "the object is not in storage — the upload did not happen"),
     };
     if size <= 0 {
         return oops(StatusCode::BAD_REQUEST, "объект пуст");
@@ -158,7 +158,7 @@ pub async fn commit(
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     // The ticket may have been removed between issuing the link and the
     // confirmation: fifteen minutes is long enough for that to happen.
@@ -169,7 +169,7 @@ pub async fn commit(
         .flatten()
         .is_none()
     {
-        return oops(StatusCode::NOT_FOUND, "тикета нет или он убран");
+        return oops(StatusCode::NOT_FOUND, "no such ticket, or it is removed");
     }
     let r = tx
         .execute(
@@ -182,7 +182,7 @@ pub async fn commit(
         Ok(_) if tx.commit().await.is_ok() => {
             Json(json!({"ticket": ticket, "filename": d.filename, "size_bytes": size})).into_response()
         }
-        _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     }
 }
 
@@ -204,7 +204,7 @@ pub async fn list(
     };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     let rows = match tx
         .query(
@@ -217,7 +217,7 @@ pub async fn list(
         .await
     {
         Ok(r) => r,
-        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
     let items: Vec<_> = rows
         .iter()
