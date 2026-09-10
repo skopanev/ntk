@@ -209,17 +209,17 @@ enum Cmd {
         #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    #[command(about = ntk_core::tools::about("ntk_similar"), long_about = ntk_core::tools::desc("ntk_similar"))]
-    Similar {
-        #[arg(help = ntk_core::tools::arg("ntk_similar", "title"))]
-        title: Option<String>,
-        #[arg(short = 'b', long, help = ntk_core::tools::arg("ntk_similar", "body"))]
+    #[command(about = ntk_core::tools::about("ntk_find"), long_about = ntk_core::tools::desc("ntk_find"))]
+    Find {
+        #[arg(help = ntk_core::tools::arg("ntk_find", "text"))]
+        text: Option<String>,
+        #[arg(short = 'b', long, help = ntk_core::tools::arg("ntk_find", "body"))]
         body: Option<String>,
-        #[arg(long, help = ntk_core::tools::arg("ntk_similar", "id"))]
+        #[arg(long, help = ntk_core::tools::arg("ntk_find", "id"))]
         id: Option<String>,
-        #[arg(short = 'n', long, help = ntk_core::tools::arg("ntk_similar", "limit"))]
+        #[arg(short = 'n', long, help = ntk_core::tools::arg("ntk_find", "limit"))]
         limit: Option<i64>,
-        #[arg(long, help = ntk_core::tools::arg("ntk_similar", "min_score"))]
+        #[arg(long, help = ntk_core::tools::arg("ntk_find", "min_score"))]
         min_score: Option<f64>,
         #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
@@ -288,8 +288,8 @@ async fn main() -> Result<()> {
         Cmd::Rm { id, yes } => rm(id, ws, yes).await,
         Cmd::Modules { project, replace, add, stdin, json } =>
             modules(ws, project, replace, add, stdin, json).await,
-        Cmd::Similar { title, body, id, limit, min_score, json } =>
-            similar(ws, title, body, id, limit, min_score, json).await,
+        Cmd::Find { text, body, id, limit, min_score, json } =>
+            find(ws, text, body, id, limit, min_score, json).await,
         Cmd::Meta { json } => meta(ws, json).await,
         Cmd::Whoami => whoami().await,
         Cmd::Mcp => serve_mcp().await,
@@ -1050,9 +1050,9 @@ async fn rm(id: String, workspace: Option<String>, yes: bool) -> Result<()> {
 
 /// Похожие тикеты. Ничего не меняет.
 #[allow(clippy::too_many_arguments)]
-async fn similar(
+async fn find(
     workspace: Option<String>,
-    title: Option<String>,
+    text: Option<String>,
     body: Option<String>,
     id: Option<String>,
     limit: Option<i64>,
@@ -1064,15 +1064,15 @@ async fn similar(
     let ws = workspace
         .or_else(config::workspace_from_rc)
         .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
-    if id.is_some() && (title.is_some() || body.is_some()) {
+    if id.is_some() && (text.is_some() || body.is_some()) {
         anyhow::bail!("either --id or text: not both");
     }
-    if id.is_none() && title.is_none() && body.is_none() {
-        anyhow::bail!("a title text or a ticket --id is required");
+    if id.is_none() && text.is_none() && body.is_none() {
+        anyhow::bail!("give text to look for, or a ticket --id");
     }
 
     let mut req = serde_json::json!({});
-    if let Some(v) = title { req["title"] = v.into(); }
+    if let Some(v) = text { req["text"] = v.into(); }
     if let Some(v) = body { req["body"] = v.into(); }
     if let Some(v) = id { req["id"] = v.into(); }
     if let Some(v) = limit { req["limit"] = v.into(); }

@@ -715,8 +715,10 @@ pub struct Create {
 #[serde(deny_unknown_fields)]
 pub struct SimilarQ {
     workspace: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
+    /// Искомый текст. Заголовок, фраза или тикет целиком — всё равно, в модель
+    /// уходит склейка, обрезанная до предела.
+    #[serde(default, alias = "title")]
+    text: Option<String>,
     #[serde(default)]
     body: Option<String>,
     /// Искать похожих на УЖЕ существующий тикет.
@@ -754,8 +756,8 @@ pub async fn similar(
     let mut policy_min = crate::vector::NEAR_DUPLICATE;
 
     // Текст: либо присланный, либо взятый у существующего тикета.
-    let (title, body, exclude) = if let Some(id) = p.id.as_deref() {
-        if p.title.is_some() || p.body.is_some() {
+    let (text, body, exclude) = if let Some(id) = p.id.as_deref() {
+        if p.text.is_some() || p.body.is_some() {
             return oops(
                 StatusCode::BAD_REQUEST,
                 "id and text are not accepted together: either similar to a ticket, or similar to the text you sent",
@@ -818,7 +820,7 @@ pub async fn similar(
                 "vectorisation is switched off in this workspace: there is nothing to search",
             );
         }
-        let t = p.title.unwrap_or_default();
+        let t = p.text.unwrap_or_default();
         let b = p.body.unwrap_or_default();
         if t.trim().is_empty() && b.trim().is_empty() {
             return oops(StatusCode::BAD_REQUEST, "give text or a ticket id");
@@ -835,7 +837,7 @@ pub async fn similar(
     // первым с оценкой 1.0, и без запаса выдача была бы короче заказанной.
     let ask = if exclude.is_some() { limit + 1 } else { limit };
 
-    match crate::vector::similar(&v, &app.pool, &ws, &title, &body, ask, min).await {
+    match crate::vector::similar(&v, &app.pool, &ws, &text, &body, ask, min).await {
         Ok(hits) => {
             let out: Vec<_> = hits
                 .into_iter()
@@ -914,7 +916,7 @@ pub async fn create(
                         return (
                             StatusCode::CONFLICT,
                             Json(json!({
-                                "error": "this looks like it has already been filed. Read the list: if it is the same work, edit the existing ticket; if it is not, send skip_search: true",
+                                "error": "Look at these before filing. If one of them is the same work, edit it instead of creating another. If none of them is, send skip_search: true.",
                                 "similar": hits
                             })),
                         )

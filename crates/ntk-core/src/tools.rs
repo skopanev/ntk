@@ -437,8 +437,8 @@ pub const ALL: &[Tool] = &[
         fields: &[WS],
     },
     Tool {
-        name: "ntk_similar",
-        cli: "similar",
+        name: "ntk_find",
+        cli: "find",
         title: "Find similar tickets",
         about: "Find tickets that already say the same thing.",
         desc: "Find tickets whose text is close to the one given, so the same work is not filed twice. Only available where vectorisation is switched on; without it the answer is a refusal, not an empty list — an empty list would read as \"nothing like it exists\". Every hit is checked against the database before it is returned, so a ticket that was removed or rewritten cannot come back through a stale vector. Ranked by closeness, closest first.",
@@ -447,9 +447,9 @@ pub const ALL: &[Tool] = &[
         idempotent: true,
         fields: &[
             WS,
-            Field::opt("title", Ty::Str, "Title of the ticket you are about to file. Compared against titles and bodies together.").capped(TITLE_MAX),
-            Field::opt("body", Ty::Str, "Body of the ticket you are about to file. Only the first 2000 characters take part.").capped(BODY_MAX),
-            Field::opt("id", Ty::Str, "Look for tickets similar to THIS existing one, instead of passing text. Not accepted together with title or body."),
+            Field::opt("text", Ty::Str, "The text to look for: a title, a sentence, or the whole ticket you are about to file. Only the first 2000 characters take part.").capped(BODY_MAX),
+            Field::opt("body", Ty::Str, "More text, joined to `text`. Convenient when the title and the body are already separate.").capped(BODY_MAX),
+            Field::opt("id", Ty::Str, "Look for tickets similar to THIS existing one, instead of passing text. Not accepted together with text or body."),
             Field::opt("limit", Ty::Int, "How many to return. 5 by default, 20 at most."),
             Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1, 0.75 by default. Measured on real tickets: a reworded duplicate scores 0.78-0.80, unrelated work about 0.50, and the closest pair among non-duplicates 0.76 — so the default sits just under the duplicates. Lower it to see more and weaker matches, raise it to see only near-identical text."),
         ],

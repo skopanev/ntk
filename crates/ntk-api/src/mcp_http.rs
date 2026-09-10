@@ -304,12 +304,12 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             }
         }
 
-        "ntk_similar" => {
+        "ntk_find" => {
             let mut q = json!({});
             if let Some(w) = &ws {
                 q["workspace"] = json!(w);
             }
-            for k in ["title", "body", "id"] {
+            for k in ["text", "body", "id"] {
                 if let Some(v) = s(args, k) {
                     q[k] = json!(v);
                 }

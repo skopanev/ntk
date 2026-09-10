@@ -326,7 +326,7 @@ impl Client {
         body["workspace"] = workspace.into();
         let r = self
             .http
-            .post(format!("{}/v1/similar", self.base))
+            .post(format!("{}/v1/find", self.base))
             .bearer_auth(key)
             .json(&body)
             .send()

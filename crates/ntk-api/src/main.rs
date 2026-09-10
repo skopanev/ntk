@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/tickets", get(tickets).post(write::create))
         // POST, а не GET: текст тикета доходит до двух тысяч символов, и в
         // строке запроса ему не место. Ручка ничего не меняет.
-        .route("/v1/similar", axum::routing::post(write::similar))
+        .route("/v1/find", axum::routing::post(write::similar))
         .route("/v1/tickets/{id}", get(ticket_one).delete(write::remove))
         .route("/v1/tickets/{id}/deps", get(write::deps))
         .route("/v1/meta", get(write::meta))

@@ -72,7 +72,7 @@ pub struct WsArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SimilarArgs {
     pub workspace: String,
-    pub title: Option<String>,
+    pub text: Option<String>,
     pub body: Option<String>,
     pub id: Option<String>,
     pub limit: Option<i64>,
@@ -524,16 +524,16 @@ impl Ntk {
     }
 
     #[tool]
-    async fn ntk_similar(&self, Parameters(a): Parameters<SimilarArgs>) -> Result<CallToolResult, McpError> {
-        if a.id.is_some() && (a.title.is_some() || a.body.is_some()) {
+    async fn ntk_find(&self, Parameters(a): Parameters<SimilarArgs>) -> Result<CallToolResult, McpError> {
+        if a.id.is_some() && (a.text.is_some() || a.body.is_some()) {
             return Err(oops("either id or text: not both"));
         }
-        if a.id.is_none() && a.title.is_none() && a.body.is_none() {
+        if a.id.is_none() && a.text.is_none() && a.body.is_none() {
             return Err(oops("give text or a ticket id"));
         }
         let (c, key) = Self::client().await?;
         let mut req = serde_json::json!({});
-        if let Some(v) = a.title { req["title"] = v.into(); }
+        if let Some(v) = a.text { req["text"] = v.into(); }
         if let Some(v) = a.body { req["body"] = v.into(); }
         if let Some(v) = a.id { req["id"] = v.into(); }
         if let Some(v) = a.limit { req["limit"] = v.into(); }
