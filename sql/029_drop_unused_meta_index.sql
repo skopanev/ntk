@@ -1,0 +1,14 @@
+-- The GIN index on `meta` indexes nothing and has never been read.
+--
+-- Measured before touching it: 0 rows out of 3654 carry a non-empty `meta`, no
+-- line of code reads or writes the column, and pg_stat_user_indexes reports
+-- idx_scan = 0 on every workspace since the schema was created.
+--
+-- The honest cost is not write amplification — a GIN index over `{}` has
+-- nothing to add, so writes barely notice it. The cost is that it advertises a
+-- capability that does not exist: the next person reads "GIN on meta" and
+-- concludes something queries it.
+--
+-- The COLUMN stays. Dropping it would be a schema change with nothing to gain,
+-- and if a use appears the index comes back in one line.
+drop index if exists tickets_meta;
