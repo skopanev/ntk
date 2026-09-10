@@ -41,6 +41,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("023_vector_debt_survives_ticket", include_str!("../../../sql/023_vector_debt_survives_ticket.sql")),
     ("024_vector_seed_carries_uuid", include_str!("../../../sql/024_vector_seed_carries_uuid.sql")),
     ("025_vector_enable_notifies", include_str!("../../../sql/025_vector_enable_notifies.sql")),
+    ("026_vector_input_sha_function", include_str!("../../../sql/026_vector_input_sha_function.sql")),
 ];
 
 #[tokio::main]
