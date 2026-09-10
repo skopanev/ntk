@@ -1,10 +1,10 @@
-//! Предподписанные ссылки на объекты Spaces.
+//! Pre-signed links to Spaces objects.
 //!
-//! Подпись считается руками на `node:crypto`-эквиваленте из `ring`/`hmac` —
-//! это HMAC-SHA256 по строке запроса, сорок строк. Тащить SDK ради одной
-//! функции незачем: тот же довод, по которому бэкап обходится обычным curl.
-//! Отличие от бэкапа только в форме — там подпись в заголовке, здесь в
-//! параметрах, чтобы ссылку можно было просто отдать клиенту.
+//! The signature is computed by hand with `hmac`: HMAC-SHA256 over the query
+//! string, forty lines of it. Dragging in an SDK for one function is not worth
+//! it — the same argument by which the backup gets by with plain curl. The only
+//! difference from the backup is shape: there the signature rides in a header,
+//! here in the parameters, so the link can simply be handed to a client.
 
 use anyhow::Result;
 use hmac::{Hmac, Mac};
@@ -13,28 +13,29 @@ use sha2::{Digest, Sha256};
 use crate::config::Config;
 
 fn hmac(key: &[u8], data: &str) -> Vec<u8> {
-    let mut m = <Hmac<Sha256>>::new_from_slice(key).expect("любой размер ключа годится");
+    let mut m = <Hmac<Sha256>>::new_from_slice(key).expect("any key length will do");
     m.update(data.as_bytes());
     m.finalize().into_bytes().to_vec()
 }
 
-/// Ссылка на чтение объекта, живущая `ttl` секунд.
+/// A read link that lives for `ttl` seconds.
 pub fn presign_get(cfg: &Config, object_key: &str, ttl: u32) -> Result<String> {
     presign(cfg, "GET", object_key, ttl)
 }
 
-/// Ссылка на запись. Клиент грузит байты НАПРЯМУЮ в Spaces, мимо дроплета:
-/// на одном ядре и двух гигабайтах файл в полсотни мегабайт через сервис —
-/// это его память и полоса на каждую операцию.
+/// A write link. The client pushes the bytes STRAIGHT to Spaces, past the
+/// droplet: on one core and two gigabytes, a fifty-megabyte file routed through
+/// the service costs its memory and its bandwidth on every single operation.
 pub fn presign_put(cfg: &Config, object_key: &str, ttl: u32) -> Result<String> {
     presign(cfg, "PUT", object_key, ttl)
 }
 
-/// Ссылка для проверки существования объекта.
+/// A link for checking whether an object exists.
 ///
-/// Отдельная от GET намеренно: подпись считается ПО МЕТОДУ, и ссылка,
-/// подписанная для GET, на HEAD не годится. На этом и попались — загрузка
-/// проходила, а проверка отвечала «объекта нет в хранилище».
+/// Deliberately separate from GET: the signature is computed OVER THE METHOD,
+/// so a link signed for GET is no good for HEAD. That is exactly what caught us
+/// out — the upload went through and the check answered "no such object in
+/// storage".
 pub fn presign_head(cfg: &Config, object_key: &str, ttl: u32) -> Result<String> {
     presign(cfg, "HEAD", object_key, ttl)
 }
@@ -48,7 +49,7 @@ fn presign(cfg: &Config, method: &str, object_key: &str, ttl: u32) -> Result<Str
         cfg.spaces_endpoint.as_deref().unwrap_or("https://ams3.digitaloceanspaces.com"),
     );
     if access.is_empty() || secret.is_empty() {
-        anyhow::bail!("ключи Spaces не заданы");
+        anyhow::bail!("Spaces keys are not configured");
     }
 
     let now = jiff::Timestamp::now();

@@ -1,10 +1,11 @@
-//! Доступ к базе. Здесь же держится главное свойство изоляции.
+//! Database access. The main isolation property lives here too.
 //!
-//! `ntk_api` не имеет прав на схемы воркспейсов. Он лишь член ролей
-//! `ntk_ws_*` и объявлен NOINHERIT, поэтому права появляются ТОЛЬКО после
-//! явного `SET LOCAL ROLE`. Забытый фильтр в коде чужой воркспейс не откроет:
-//! откажет база. Свойство проверяется `server/db/isolation-test.sh`, и до
-//! NOINHERIT оно не выполнялось — роль-член наследует права по умолчанию.
+//! `ntk_api` holds no rights on workspace schemas. It is merely a member of the
+//! `ntk_ws_*` roles and is declared NOINHERIT, so the rights appear ONLY after
+//! an explicit `SET LOCAL ROLE`. A filter forgotten in the code cannot open
+//! somebody else's workspace: the database refuses. The property is checked by
+//! `server/db/isolation-test.sh`, and before NOINHERIT it did not hold — a
+//! member role inherits rights by default.
 
 use anyhow::{bail, Result};
 use deadpool_postgres::{Config as PgConfig, Pool, Runtime};
@@ -14,13 +15,13 @@ pub fn pool(database_url: &str) -> Result<Pool> {
     let mut cfg = PgConfig::new();
     cfg.url = Some(database_url.to_string());
 
-    // По умолчанию deadpool берёт четыре соединения на ядро, а ядро здесь одно.
-    // Четыре — это скрытый потолок, который не мешает сегодня и упрётся при
-    // росте, причём выглядеть будет как «база тормозит»: запросы встанут в
-    // очередь за соединением, а не за базой.
+    // By default deadpool takes four connections per core, and there is one
+    // core here. Four is a hidden ceiling: harmless today, binding as we grow,
+    // and it would look like "the database is slow" — the queries would be
+    // queueing for a connection, not for the database.
     //
-    // Шестнадцать против max_connections = 100 у Postgres: запас есть, и
-    // соединения дешевле, чем ожидание.
+    // Sixteen against Postgres's max_connections = 100: there is headroom, and
+    // connections are cheaper than waiting.
     cfg.pool = Some(deadpool_postgres::PoolConfig {
         max_size: 16,
         ..Default::default()
@@ -28,9 +29,9 @@ pub fn pool(database_url: &str) -> Result<Pool> {
     Ok(cfg.create_pool(Some(Runtime::Tokio1), NoTls)?)
 }
 
-/// Имя воркспейса приходит из `core.workspaces`, но подставляется в SQL как
-/// идентификатор, поэтому проверяется всё равно: доверие к источнику не
-/// заменяет проверку на границе.
+/// The workspace name comes from `core.workspaces`, but it is interpolated into
+/// SQL as an identifier, so it is validated anyway: trusting the source is no
+/// substitute for checking at the boundary.
 fn valid_ident(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 31
@@ -38,15 +39,15 @@ fn valid_ident(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Открывает транзакцию, войдя в роль воркспейса.
+/// Opens a transaction, having entered the workspace role.
 ///
-/// `SET LOCAL` откатывается вместе с транзакцией — обязательное условие при
-/// пуле соединений: без `LOCAL` роль осталась бы на соединении и утекла бы в
-/// следующий запрос, возможно чужой.
+/// `SET LOCAL` rolls back with the transaction — a hard requirement when
+/// connections are pooled: without `LOCAL` the role would stay on the
+/// connection and leak into the next query, possibly somebody else's.
 ///
-/// Возвращаем саму транзакцию, а не принимаем замыкание: вариант с
-/// `AsyncFnOnce` выглядел аккуратнее, но его future не доказывается `Send`, и
-/// axum отказывался принимать такой хендлер. Прямее — надёжнее.
+/// We return the transaction itself rather than take a closure: the
+/// `AsyncFnOnce` version looked tidier, but its future cannot be proven `Send`,
+/// and axum refused such a handler. Plainer is sturdier.
 pub async fn begin<'a>(
     client: &'a mut deadpool_postgres::Client,
     workspace: &str,
@@ -77,14 +78,14 @@ mod tests {
             "ftk-1",
             &"a".repeat(32),
         ] {
-            assert!(!valid_ident(bad), "«{bad}» должен быть отвергнут");
+            assert!(!valid_ident(bad), "{bad:?} must be refused");
         }
     }
 
     #[test]
     fn real_workspace_names_pass() {
         for good in ["ftk", "acme", "ws_2"] {
-            assert!(valid_ident(good), "«{good}» должен проходить");
+            assert!(valid_ident(good), "{good:?} must pass");
         }
     }
 }

@@ -1,31 +1,32 @@
-//! Условия отбора тикетов — одно место на все запросы.
+//! Ticket filtering — one place for every query.
 //!
-//! Список и обход отбирают одинаково, и это не совпадение, а требование: если
-//! `walk` понимает «тег infra» иначе, чем `ls`, человек проверяет не то, что
-//! видел в списке, и узнаёт об этом в лучшем случае случайно. Два набора
-//! условий в двух местах расходятся не «если», а «когда».
+//! The list and the walk filter identically, and that is a requirement rather
+//! than a coincidence: if `walk` understood "tag infra" differently from `ls`,
+//! a person would be reviewing something other than what they saw in the list,
+//! and would find out by luck at best. Two sets of conditions in two places
+//! drift apart not "if" but "when".
 
 use serde::Deserialize;
 
 #[derive(Deserialize, Default, Clone)]
 pub struct Filters {
     pub status: Option<String>,
-    /// Теги через запятую. Все перечисленные должны быть на тикете.
+    /// Comma-separated tags. Every one listed must be on the ticket.
     pub tag: Option<String>,
-    /// Тег совпадает целиком, а не входит частью.
+    /// The tag matches in full rather than as a part.
     #[serde(default)]
     pub strict: bool,
     pub title: Option<String>,
     pub assignee: Option<String>,
     pub project: Option<String>,
     pub module: Option<String>,
-    /// Тикеты всех, а не только свои. Проигрывает явно названному исполнителю.
+    /// Everyone's tickets, not just yours. Loses to an explicitly named assignee.
     #[serde(default)]
     pub all: bool,
 }
 
-/// Готовые значения для подстановки. Держатся отдельно от строки запроса,
-/// потому что аргументы обязаны пережить её использование.
+/// The bound values. Kept apart from the query string because the arguments
+/// have to outlive its use.
 pub struct Bound {
     pub status: Option<String>,
     pub tags: Option<Vec<String>>,
@@ -37,7 +38,7 @@ pub struct Bound {
 }
 
 impl Filters {
-    /// Кого считать исполнителем: явно названного, «всех» или спрашивающего.
+    /// Who counts as the assignee: the one named, everyone, or the caller.
     pub fn bind(&self, me: &str) -> Bound {
         let tags: Option<Vec<String>> = self.tag.as_deref().map(|t| {
             t.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
@@ -57,8 +58,8 @@ impl Filters {
         }
     }
 
-    /// Человекочитаемое описание отбора. По нему же различаются обходы: назвали
-    /// другое — начался другой обход.
+    /// A human-readable description of the filter. Walks are told apart by it
+    /// too: name something else and a different walk begins.
     pub fn describe(&self) -> String {
         let mut p = Vec::new();
         if let Some(v) = &self.status { p.push(format!("статус {v}")); }
@@ -72,12 +73,12 @@ impl Filters {
     }
 }
 
-/// Дописывает условия к запросу и собирает аргументы.
+/// Appends the conditions to the query and collects the arguments.
 ///
-/// Условия именно дописываются, а не прячутся за `($1 is null or …)`: такая
-/// запись короче, но ОТКЛЮЧАЕТ индексы — планировщик не может доказать, что
-/// частичный индекс подойдёт, когда условие спрятано за «или». Замерено на 5340
-/// тикетах: последовательный скан и 4179 прочитанных строк на каждый список.
+/// The conditions are appended rather than hidden behind `($1 is null or …)`:
+/// that form is shorter but it DISABLES indexes — the planner cannot prove a
+/// partial index applies when the condition sits behind an "or". Measured on
+/// 5340 tickets: a sequential scan and 4179 rows read for every listing.
 pub fn apply<'a>(
     sql: &mut String,
     args: &mut Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>,
@@ -102,13 +103,13 @@ pub fn apply<'a>(
     match (&b.tags, b.strict) {
         (Some(_), true) => {
             args.push(&b.tags);
-            // Массив и `@>`, а не `= any(…)`: первое берёт GIN-индекс.
+            // An array with `@>` rather than `= any(…)`: the first takes the GIN index.
             sql.push_str(&format!(" and tags @> ${}::text[]", args.len()));
         }
         (Some(list), false) => {
-            // Теги живут семействами: `infra` и `initiative:infra-…` про
-            // одно и то же. Отсюда вхождение по умолчанию — и скан вместо
-            // индекса как честная его цена.
+            // Tags come in families: `infra` and `initiative:infra-…` are
+            // about the same thing. Hence substring matching by default — and
+            // a scan instead of an index as its honest price.
             for t in list {
                 args.push(t);
                 sql.push_str(&format!(

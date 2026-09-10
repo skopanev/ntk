@@ -1,11 +1,11 @@
-//! Вход через Google. Здесь проверяется, кто пришёл.
+//! Signing in through Google. This is where we check who turned up.
 //!
-//! Библиотека взята намеренно, хотя всё остальное в проекте написано руками:
-//! подпись S3-запроса — механика со своим входом, а разбор JWT — разбор
-//! данных, которыми управляет атакующий. Там целый класс классических дыр:
-//! подмена алгоритма на `none`, забытая проверка `aud`, неучтённая ротация
-//! ключей. Самописная проверка выглядит работающей ровно до того дня, когда
-//! перестаёт.
+//! A library was taken deliberately, although everything else in the project is
+//! written by hand: signing an S3 request is mechanics with a known input,
+//! while parsing a JWT is parsing data an attacker controls. There is a whole
+//! class of classic holes there: the algorithm swapped to `none`, a forgotten
+//! `aud` check, unaccounted key rotation. A hand-rolled check looks like it
+//! works right up to the day it stops.
 
 use anyhow::{bail, Context, Result};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
@@ -32,21 +32,22 @@ pub struct Identity {
     pub email: String,
     #[serde(default)]
     pub email_verified: bool,
-    /// Домен Workspace. У личного Gmail отсутствует — и это единственный
-    /// признак, который нельзя подделать: параметр `hd` в ссылке лишь
-    /// подсказка интерфейсу, её правят руками в адресной строке.
+    /// The Workspace domain. Absent for a personal Gmail — and this is the one
+    /// signal that cannot be forged: the `hd` parameter in the link is only a
+    /// hint to the interface, editable by hand in the address bar.
     #[serde(default)]
     pub hd: Option<String>,
 }
 
-/// Ссылка, куда отправляем человека. `state` привязан к device-коду и
-/// защищает от подстановки чужого ответа.
+/// The link a person is sent to. `state` is tied to the device code and guards
+/// against somebody else's answer being substituted.
 ///
-/// Параметр `hd` НЕ передаётся намеренно. Он был бы лишь подсказкой Google,
-/// какой домен показывать, — обходится правкой адресной строки и потому
-/// ничего не охраняет. Зато он показывал бы человеку чужой домен: сотрудник
-/// одной компании видел бы в ссылке имя другой. Домен проверяется claim `hd`
-/// внутри подписанного токена, и только там.
+/// The `hd` parameter is deliberately NOT passed. It would only hint to Google
+/// which domain to show — bypassed by editing the address bar, and therefore
+/// guarding nothing. What it would do is show a person the wrong domain: an
+/// employee of one company would see another company's name in the link. The
+/// domain is checked by the `hd` claim inside the signed token, and only
+/// there.
 pub fn auth_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
     let enc = urlencoding::encode;
     format!(
@@ -58,8 +59,8 @@ pub fn auth_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
     )
 }
 
-/// Меняет одноразовый код на токены. Идёт сервер-серверу: `client_secret` в
-/// браузере не появляется никогда.
+/// Exchanges the one-time code for tokens. Server to server: `client_secret`
+/// never appears in a browser.
 pub async fn exchange_code(
     client_id: &str,
     client_secret: &str,
@@ -95,11 +96,12 @@ pub async fn exchange_code(
     resp.id_token.context("Google не вернул id_token")
 }
 
-/// Проверяет `id_token` и отдаёт личность.
+/// Verifies the `id_token` and returns the identity.
 ///
-/// JWKS запрашивается на каждый вход, а не кэшируется: самозапись случается
-/// редко, зато ротация ключей Google не может застать нас со старым набором.
-/// Кэш здесь экономил бы миллисекунды ценой класса ошибок «вчера работало».
+/// JWKS is fetched on every sign-in rather than cached: sign-ins are rare,
+/// whereas Google rotating its keys must never catch us holding the old set. A
+/// cache here would save milliseconds at the price of a class of bugs that read
+/// as "it worked yesterday".
 pub async fn verify_id_token(
     id_token: &str,
     client_id: &str,
@@ -121,7 +123,7 @@ pub async fn verify_id_token(
     let mut v = Validation::new(Algorithm::RS256);
     v.set_audience(&[client_id]);
     v.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
-    // exp проверяется по умолчанию; оставляем это явным напоминанием.
+    // exp is validated by default; kept here as an explicit reminder.
     v.validate_exp = true;
 
     let data = decode::<Identity>(id_token, &DecodingKey::from_rsa_components(&jwk.n, &jwk.e)?, &v)

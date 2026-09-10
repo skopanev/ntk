@@ -1,19 +1,20 @@
-//! Вход без передачи ключа из рук в руки.
+//! Signing in without passing a key from hand to hand.
 //!
-//! Расширение показывает короткий код, человек открывает ссылку и входит
-//! через Google, расширение забирает ключ само. Ключ не появляется ни в
-//! переписке, ни у владельца: раздавать его руками — работа, которая никогда
-//! не кончается.
+//! The client shows a short code, the person opens a link and signs in through
+//! Google, and the client collects the key itself. The key never appears in a
+//! chat or in the owner's hands: handing keys out by hand is work that never
+//! ends.
 //!
-//! Код короткий, потому что его читают с экрана. Короткий код угадываем, и
-//! защищает не он, а секрет устройства: забрать ключ может только тот, кто
-//! начинал вход. Плюс срок жизни в пять минут и одна попытка забора.
+//! The code is short because it is read off a screen. A short code is
+//! guessable, and what protects it is not the code but the device secret: only
+//! whoever started the sign-in can collect the key. Plus a five-minute life and
+//! a single collection attempt.
 
 use anyhow::{bail, Result};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
-/// Без похожих на вид символов: 0/O и 1/I/L человек путает, диктуя код.
+/// No look-alike characters: people mix up 0/O and 1/I/L when reading a code aloud.
 const ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 pub const TTL_SECONDS: i64 = 300;
 
@@ -28,7 +29,7 @@ pub fn generate() -> Started {
         (0..n).map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char).collect()
     };
     let code = format!("{}-{}", pick(&mut rng, 4), pick(&mut rng, 4));
-    // Секрет устройства длинный: его читает не человек, а программа.
+    // The device secret is long: a program reads it, not a person.
     let device_secret: String = (0..48)
         .map(|_| {
             const HEX: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
@@ -42,8 +43,8 @@ pub fn hash(s: &str) -> String {
     hex::encode(Sha256::digest(s.as_bytes()))
 }
 
-/// Приводит введённый человеком код к каноническому виду: он диктуется вслух
-/// и набирается как придётся — с пробелами, в нижнем регистре, без дефиса.
+/// Brings a typed code to its canonical form: it gets dictated aloud and typed
+/// however it lands — with spaces, in lower case, without the dash.
 pub fn normalize(input: &str) -> String {
     let cleaned: String = input
         .chars()
@@ -57,7 +58,7 @@ pub fn normalize(input: &str) -> String {
     }
 }
 
-/// Ключ, который выдаётся человеку после успешного входа.
+/// The key handed to a person after a successful sign-in.
 pub fn new_api_key() -> String {
     let mut rng = rand::thread_rng();
     const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -65,9 +66,9 @@ pub fn new_api_key() -> String {
     format!("ntk_{body}")
 }
 
-/// Выбирает правило записи: точное совпадение по адресу побеждает домен.
-/// Так личный адрес или особая роль добавляется одной строкой, без расширения
-/// домена на всех.
+/// Picks the enrolment rule: an exact address beats the domain. That way a
+/// personal address or a special role is added in one line, without widening
+/// the domain rule to everyone.
 pub fn pick_rule<'a, T>(email: &str, by_email: Option<&'a T>, by_domain: Option<&'a T>) -> Result<&'a T> {
     if let Some(r) = by_email {
         return Ok(r);
@@ -75,7 +76,7 @@ pub fn pick_rule<'a, T>(email: &str, by_email: Option<&'a T>, by_domain: Option<
     if let Some(r) = by_domain {
         return Ok(r);
     }
-    bail!("для {email} нет правила доступа: ни по адресу, ни по домену")
+    bail!("no access rule for {email}: neither by address nor by domain")
 }
 
 #[cfg(test)]
@@ -85,12 +86,12 @@ mod tests {
     #[test]
     fn code_is_readable_aloud() {
         let s = generate();
-        assert_eq!(s.code.len(), 9, "формат XXXX-XXXX: {}", s.code);
+        assert_eq!(s.code.len(), 9, "expected XXXX-XXXX: {}", s.code);
         assert_eq!(s.code.as_bytes()[4], b'-');
         for c in s.code.chars().filter(|c| *c != '-') {
             assert!(
                 !"O0I1L".contains(c),
-                "символ {c} путается при диктовке: {}",
+                "the character {c} is confusable when read aloud: {}",
                 s.code
             );
         }
@@ -100,7 +101,7 @@ mod tests {
     #[test]
     fn humans_type_the_code_however_they_like() {
         for typed in ["hxtp-9f2k", "HXTP 9F2K", "hxtp9f2k", " HXTP-9F2K "] {
-            assert_eq!(normalize(typed), "HXTP-9F2K", "не привёлся: {typed}");
+            assert_eq!(normalize(typed), "HXTP-9F2K", "did not normalise: {typed}");
         }
     }
 
@@ -114,8 +115,8 @@ mod tests {
 
     #[test]
     fn an_exact_address_beats_the_domain() {
-        assert_eq!(pick_rule("a@b.c", Some(&"по адресу"), Some(&"по домену")).unwrap(), &"по адресу");
-        assert_eq!(pick_rule("a@b.c", None, Some(&"по домену")).unwrap(), &"по домену");
+        assert_eq!(pick_rule("a@b.c", Some(&"by address"), Some(&"by domain")).unwrap(), &"by address");
+        assert_eq!(pick_rule("a@b.c", None, Some(&"by domain")).unwrap(), &"by domain");
         assert!(pick_rule("a@b.c", None::<&&str>, None).is_err());
     }
 

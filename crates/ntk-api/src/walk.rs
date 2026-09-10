@@ -1,14 +1,14 @@
-//! Обход тикетов по одному: просмотр, а не работа.
+//! Walking tickets one at a time: reviewing, not working.
 //!
-//! `next` берёт тикет В РАБОТУ — меняет статус и ставит исполнителя. Для
-//! проверки это негодно: пройти так тридцать тикетов значит перевести их все на
-//! себя в in_progress, то есть испортить очередь, а не проверить её. Здесь
-//! ничего не меняется, кроме отметки «показано».
+//! `next` takes a ticket INTO WORK — it changes the status and sets the
+//! assignee. That is useless for review: walking thirty tickets that way would
+//! move all thirty onto yourself in in_progress, wrecking the queue rather than
+//! checking it. Nothing changes here except the "shown" mark.
 //!
-//! Список не снимается заранее: каждый шаг спрашивает базу заново и берёт
-//! первый непоказанный. Со снимком набора первая же правка сдвигает остальных,
-//! и шаг перескакивает через соседа — молча, что и есть худший способ потерять
-//! тикет при проверке.
+//! The list is not snapshotted up front: every step asks the database again and
+//! takes the first unshown one. With a snapshot, the first edit shifts the rest
+//! and a step skips over a neighbour — silently, which is the worst way to lose
+//! a ticket during review.
 
 use std::sync::Arc;
 
@@ -26,22 +26,23 @@ use crate::{auth, db, filter, App};
 #[derive(Deserialize)]
 pub struct WalkQuery {
     workspace: Option<String>,
-    /// Идентификатор сеанса. Придумывает КЛИЕНТ.
+    /// The session identifier. Invented by the CLIENT.
     ///
-    /// Именно поэтому два агента под одним ключом не мешают друг другу: у
-    /// каждого свой сеанс. Ключ на человека означал бы общую память обхода и
-    /// один и тот же тикет обоим.
+    /// That is exactly why two agents under one key do not disturb each other:
+    /// each has its own session. Keying on the person would mean a shared walk
+    /// memory and the same ticket handed to both.
     walk_id: String,
-    /// Забыть показанное и пойти сначала.
+    /// Forget what was shown and start over.
     #[serde(default)]
     reset: bool,
 
-    // Отборы перечислены поштучно, а не вложены через `#[serde(flatten)]`.
+    // The filters are listed one by one rather than nested via
+    // `#[serde(flatten)]`.
     //
-    // С flatten разбор строки запроса ломается молча: под ним всё поле
-    // становится строкой, и `strict=true` перестаёт быть логическим значением —
-    // «invalid type: string "true", expected a boolean». Ошибка вылезает только
-    // на живом запросе, компилятор её не видит.
+    // With flatten, query-string parsing breaks silently: under it every field
+    // becomes a string and `strict=true` stops being a boolean — "invalid type:
+    // string \"true\", expected a boolean". The error only shows up on a live
+    // request; the compiler does not see it.
     status: Option<String>,
     tag: Option<String>,
     #[serde(default)]
@@ -103,11 +104,12 @@ pub async fn step(
     let what = f.describe();
     let user = actor.user_id.clone();
 
-    // Показанное живёт в core, а тикеты — в схеме воркспейса. Читаем сначала,
-    // пока роль ещё наша: под ролью воркспейса в core уже не заглянуть.
+    // What has been shown lives in core, while the tickets live in the
+    // workspace schema. We read it first, while the role is still ours: under
+    // the workspace role there is no looking into core any more.
     if q.reset {
-        // Владелец в условии: чужой сеанс не сбрасывается даже по угаданному
-        // идентификатору.
+        // The owner is in the condition: somebody else's session is not reset
+        // even with a guessed identifier.
         if let Err(e) = client
             .execute(
                 "delete from core.walk_state where walk_id=$1 and user_id=$2",
@@ -119,12 +121,12 @@ pub async fn step(
             return err(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
         }
     }
-    // Брошенные обходы убираются здесь же, а не отдельным заданием по
-    // расписанию: задание — ещё одна вещь, которая однажды молча перестанет
-    // запускаться, и мы узнаем об этом по распухшей таблице. Неделя выбрана
-    // потому, что через неделю «я это уже смотрел» всё равно неправда:
-    // статусы разъехались, половина тикетов закрыта. Удаление идёт по индексу
-    // на updated_at и стоит доли миллисекунды.
+    // Abandoned walks are cleared right here rather than by a scheduled job: a
+    // job is one more thing that will one day quietly stop running, and we
+    // would learn about it from a bloated table. A week was chosen because
+    // after a week "I already looked at this" is untrue anyway: the statuses
+    // have moved on and half the tickets are closed. The delete goes through
+    // the index on updated_at and costs a fraction of a millisecond.
     let _ = client
         .execute(
             "delete from core.walk_state where updated_at < now() - interval '7 days'",
@@ -132,8 +134,9 @@ pub async fn step(
         )
         .await;
 
-    // Заводим сеанс, если его нет. Существующий чужой не перехватывается:
-    // владелец сверяется ниже, и несовпадение — отказ, а не тихая подмена.
+    // Create the session if it does not exist. An existing one belonging to
+    // somebody else is not hijacked: the owner is checked below, and a mismatch
+    // is a refusal rather than a quiet substitution.
     if let Err(e) = client
         .execute(
             "insert into core.walk_state (walk_id, user_id, workspace, what)
@@ -190,8 +193,7 @@ pub async fn step(
     let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
     filter::apply(&mut sql, &mut args, &bound);
     args.push(&seen);
-    // Порядок тот же, что у списка: человек проверяет в том порядке, в каком
-    // видел.
+    // The same order as the list: a person reviews in the order they saw.
     sql.push_str(&format!(
         " and id <> all(${}::text[]) order by created_at desc limit 1",
         args.len()
@@ -240,12 +242,13 @@ pub async fn step(
         closed_at: r.get(14),
     };
 
-    // Отметка ставится проверкой-и-записью: условие `not (… = any(seen))`
-    // означает, что запись пройдёт только у того, кто пришёл первым.
+    // The mark is set by check-and-write: the `not (… = any(seen))` condition
+    // means the write only succeeds for whoever got there first.
     //
-    // Это страховка на случай, когда одним идентификатором сеанса идут двое.
-    // Само по себе такое не случается — идентификатор придумывает клиент, — но
-    // если случится, проигравший получит ОТКАЗ, а не тот же тикет молча.
+    // This is insurance for the case where two walkers share one session
+    // identifier. It does not happen on its own — the client invents the
+    // identifier — but if it does, the loser gets a REFUSAL rather than the
+    // same ticket in silence.
     let marked = client
         .execute(
             "update core.walk_state

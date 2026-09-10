@@ -1,8 +1,9 @@
-//! Выпуски клиента: что считать текущим и откуда его взять.
+//! Client releases: what counts as current and where to get it.
 //!
-//! Артефакты лежат в приватном бакете Spaces; наружу отдаётся не сам файл, а
-//! предподписанная ссылка с коротким сроком. Ключи Spaces не покидают дроплет,
-//! а байты не идут через него: скачивание — дело клиента и хранилища.
+//! The artefacts live in a private Spaces bucket; what goes out is not the file
+//! but a pre-signed link with a short life. The Spaces keys never leave the
+//! droplet and the bytes never pass through it: downloading is between the
+//! client and the storage.
 
 use std::sync::Arc;
 
@@ -14,11 +15,12 @@ use axum::{
 };
 use serde::Deserialize;
 
-/// Платформа клиента. Обязательна и не имеет значения по умолчанию.
+/// The client platform. Required, with no default.
 ///
-/// Раньше здесь было зашито darwin-arm64, и сервер отдавал macOS-бинарь ЛЮБОМУ
-/// клиенту. Успешное скачивание на Linux заменило бы рабочий бинарь
-/// несовместимым — обновление сломало бы машину, а не починило.
+/// darwin-arm64 used to be hard-wired here, and the server handed the macOS
+/// binary to ANY client. A successful download on Linux would have replaced a
+/// working binary with an incompatible one — the upgrade would have broken the
+/// machine rather than fixed it.
 #[derive(Deserialize)]
 pub struct PlatformQuery {
     platform: Option<String>,
@@ -33,9 +35,9 @@ use serde_json::json;
 
 use crate::{spaces, App};
 
-/// Текущая версия для платформы. Отвечает БЕЗ ключа: клиент, который ещё не
-/// вошёл, тоже должен уметь обновиться, а знание номера версии секретом не
-/// является.
+/// The current version for a platform. Answers WITHOUT a key: a client that has
+/// not signed in yet must still be able to update itself, and knowing a version
+/// number is not a secret.
 pub async fn current(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>) -> Response {
     let Some(platform) = wanted(&q) else {
         return (
@@ -70,7 +72,7 @@ pub async fn current(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>
                 }))
                 .into_response(),
                 Err(e) => {
-                    tracing::error!(error = %e, "не удалось подписать ссылку на выпуск");
+                    tracing::error!(error = %e, "could not sign the release link");
                     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"внутренняя ошибка"}))).into_response()
                 }
             }
@@ -81,18 +83,18 @@ pub async fn current(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>
         )
             .into_response(),
         Err(e) => {
-            tracing::error!(error = %e, "запрос выпуска не прошёл");
+            tracing::error!(error = %e, "the release query failed");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"внутренняя ошибка"}))).into_response()
         }
     }
 }
 
-/// Скачивание одной ссылкой: `curl -L https://…/v1/download -o ntk`.
+/// Download in one link: `curl -L https://…/v1/download -o ntk`.
 ///
-/// Бакет приватный, поэтому голая ссылка не работает — сервер подписывает её и
-/// переадресовывает. Без этого человеку пришлось бы сначала звать /v1/version,
-/// разбирать JSON и только потом качать, и в инструкции это выглядело бы как
-/// «возьми файл у Сергея».
+/// The bucket is private, so a bare link does not work — the server signs one
+/// and redirects to it. Without this a person would have to call /v1/version
+/// first, parse the JSON and only then download, and in the instructions that
+/// would read as "ask someone for the file".
 pub async fn download(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery>) -> Response {
     let Some(platform) = wanted(&q) else {
         return (StatusCode::BAD_REQUEST, "укажите platform, например ?platform=darwin-arm64").into_response();

@@ -1,8 +1,9 @@
-//! Вложения. Байты идут между клиентом и Spaces напрямую, мимо дроплета.
+//! Attachments. The bytes travel between the client and Spaces directly, past
+//! the droplet.
 //!
-//! Ключ объекта назначает СЕРВЕР, а не клиент. Приняв ключ от клиента, мы
-//! позволили бы ему перезаписать чужой объект или выйти за пределы своего
-//! воркспейса — ссылка подписывается ровно на тот ключ, который в ней назван.
+//! The object key is assigned by the SERVER, not the client. Accepting a key
+//! from the client would let it overwrite someone else's object or step outside
+//! its own workspace — a link is signed for exactly the key named in it.
 
 use std::sync::Arc;
 
@@ -54,7 +55,7 @@ pub struct AskUpload {
     content_type: Option<String>,
 }
 
-/// Шаг 1: клиент просит ссылку. Отдаём ключ и подписанный PUT.
+/// Step 1: the client asks for a link. We hand back a key and a signed PUT.
 pub async fn begin(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -68,8 +69,9 @@ pub async fn begin(
     if a.size_bytes <= 0 || a.size_bytes > 50 * 1024 * 1024 {
         return oops(StatusCode::BAD_REQUEST, "размер вне допустимого: от 1 байта до 50 МБ");
     }
-    // Имя файла в ключ не подставляем как есть: точки, слэши и обход каталога
-    // приехали бы прямо в подпись. Имя хранится в базе, ключ — сгенерирован.
+    // The file name does not go into the key as given: dots, slashes and
+    // directory traversal would ride straight into the signature. The name is
+    // kept in the database; the key is generated.
     let safe: String = a
         .filename
         .chars()
@@ -81,8 +83,8 @@ pub async fn begin(
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
-    // deleted_at обязателен: убранный тикет не должен принимать вложения.
-    // Без этого условия можно было получить ссылку на загрузку к удалённому.
+    // deleted_at is required: a removed ticket must not accept attachments.
+    // Without this condition one could get an upload link for a deleted one.
     if tx
         .query_opt("select 1 from tickets where lower(id) = lower($1) and deleted_at is null", &[&ticket])
         .await
@@ -120,8 +122,8 @@ pub struct Done {
     content_type: Option<String>,
 }
 
-/// Шаг 2: клиент сообщает, что загрузил. Сервер ПРОВЕРЯЕТ объект и только
-/// потом записывает — верим хранилищу, а не клиенту.
+/// Step 2: the client reports that it uploaded. The server VERIFIES the object
+/// and only then records it — we believe the storage, not the client.
 pub async fn commit(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -132,8 +134,8 @@ pub async fn commit(
         Ok(v) => v,
         Err(r) => return r,
     };
-    // Ключ обязан лежать внутри своего воркспейса и своего тикета: иначе
-    // клиент прикрепил бы к тикету чужой объект, назвав его своим.
+    // The key must sit inside its own workspace and its own ticket: otherwise
+    // a client could attach someone else's object and call it its own.
     let prefix = format!("attachments/{ws}/{ticket}/");
     if !d.object_key.starts_with(&prefix) {
         return oops(StatusCode::BAD_REQUEST, "ключ объекта не принадлежит этому тикету");
@@ -158,8 +160,8 @@ pub async fn commit(
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
-    // Тикет мог быть убран между выдачей ссылки и подтверждением: пятнадцать
-    // минут — достаточный срок, чтобы это случилось.
+    // The ticket may have been removed between issuing the link and the
+    // confirmation: fifteen minutes is long enough for that to happen.
     if tx
         .query_opt("select 1 from tickets where lower(id) = lower($1) and deleted_at is null", &[&ticket])
         .await
@@ -189,7 +191,7 @@ pub struct Ws {
     workspace: Option<String>,
 }
 
-/// Список вложений с временными ссылками на скачивание.
+/// The attachment list, with short-lived download links.
 pub async fn list(
     State(app): State<Arc<App>>,
     headers: HeaderMap,

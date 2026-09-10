@@ -508,13 +508,18 @@ pub async fn reconcile(
     let mut wrong_model = 0usize;
     for p in &points {
         let Some((_, want)) = live.get(&p.ticket) else { continue };
-        if p.sha.as_deref() != Some(want.as_str()) {
-            stale.insert(p.ticket.as_str());
-        } else if p.model.as_deref() != Some(MODEL)
-            || p.input_max != Some(crate::write::EMBED_INPUT_MAX)
-        {
-            stale.insert(p.ticket.as_str());
+        // Две причины считаются НЕЗАВИСИМО: точка, разошедшаяся и по тексту, и
+        // по модели, должна попасть в обе цифры. Через else if она попадала бы
+        // только в первую, и в журнале смена модели выглядела бы как обычная
+        // правка текста — то есть как рутина, а не как смешанный индекс.
+        let text_moved = p.sha.as_deref() != Some(want.as_str());
+        let model_moved = p.model.as_deref() != Some(MODEL)
+            || p.input_max != Some(crate::write::EMBED_INPUT_MAX);
+        if model_moved {
             wrong_model += 1;
+        }
+        if text_moved || model_moved {
+            stale.insert(p.ticket.as_str());
         }
     }
     let have: std::collections::HashSet<&str> = points.iter().map(|p| p.ticket.as_str()).collect();
@@ -581,11 +586,20 @@ pub async fn reconcile(
     // Массовое «устарело» при спокойном воркспейсе — это не работа, а поломка:
     // так выглядит расхождение между SQL и Rust. Иначе оно видно только по
     // всплескам счёта раз в шесть часов, то есть по счёту от провайдера.
-    if points.len() >= 8 && stale.len() * 2 > points.len() {
+    //
+    // Порогов два, и второй нужен именно из-за первого. Пол в восемь стоит
+    // против ложных тревог: три точки, все три поправили при лежащем сливе —
+    // это честное «устарело всё», и error по нему был бы шумом. Но он же
+    // делает дрейф невидимым на маленьком воркспейсе. Поэтому «устарели ВСЕ
+    // разом» — тревога при ЛЮБОМ размере: при живом сливе так не бывает, долги
+    // разбираются за секунды, и полное расхождение означает либо дрейф
+    // выражений, либо мёртвый слив. И то и другое стоит громкой строки.
+    let all_stale = points.len() >= 2 && stale.len() == points.len();
+    if all_stale || (points.len() >= 8 && stale.len() * 2 > points.len()) {
         tracing::error!(
             workspace = %ws, stale = stale.len(), points = points.len(),
-            "устарело больше половины точек — похоже, разошлись выражения отпечатка, \
-             а не изменились тикеты"
+            "устарело больше половины точек — похоже, разошлись выражения отпечатка \
+             или встал слив, а не изменились тикеты"
         );
     }
     Ok((removed, seeded))

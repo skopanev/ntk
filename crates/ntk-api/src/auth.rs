@@ -1,19 +1,18 @@
-//! Разрешение ключа в личность и область доступа.
+//! Resolving a key into an identity and a scope.
 //!
-//! Ключ принадлежит ПОЛЬЗОВАТЕЛЮ, а не воркспейсу: область берётся из
-//! `core.user_workspaces`, поэтому ротация ключа её не меняет, а у человека
-//! может быть несколько ключей. Отказ по умолчанию: нужен активный
-//! пользователь, живой ключ и хотя бы одна строка доступа — иначе `core.
-//! resolve_key` не вернёт ничего.
+//! A key belongs to a USER, not to a workspace: the scope comes from
+//! `core.user_workspaces`, so rotating a key does not change it, and one person
+//! may hold several keys. Deny by default: it takes an active user, a live key
+//! and at least one access row — otherwise `core.resolve_key` returns nothing.
 
 use axum::http::HeaderMap;
 use sha2::{Digest, Sha256};
 
-/// Кто пришёл и куда ему можно.
+/// Who turned up and where they are allowed.
 ///
-/// `kind` и `role` из `core.resolve_key` сюда намеренно не переносятся: пока
-/// на них ничего не опирается, поле в структуре обещало бы работающий
-/// механизм, которого нет. Появятся вместе с политиками для CAMLO.
+/// `kind` and `role` from `core.resolve_key` are deliberately not carried here:
+/// while nothing rests on them, a field in the struct would promise a working
+/// mechanism that does not exist. They arrive together with the policies.
 #[derive(Debug, Clone)]
 pub struct Actor {
     pub user_id: String,
@@ -26,15 +25,16 @@ impl Actor {
     }
 }
 
-/// Хранится и сверяется только sha256. Ключ высокоэнтропийный (240 бит),
-/// поэтому соль не нужна, а простой хеш позволяет искать по индексу, а не
-/// перебирать все строки на каждый запрос.
+/// Only the sha256 is stored and compared. The key is high-entropy (240 bits),
+/// so no salt is needed, and a plain hash lets us search by index instead of
+/// walking every row on each request.
 pub fn hash_key(key: &str) -> String {
     hex::encode(Sha256::digest(key.as_bytes()))
 }
 
-/// Достаёт ключ из заголовка. Принимаем только `Authorization: Bearer …` —
-/// ключ в query-параметре осел бы в логах Caddy и в истории браузера.
+/// Pulls the key out of the header. Only `Authorization: Bearer …` is accepted
+/// — a key in a query parameter would settle in Caddy's logs and in browser
+/// history.
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(axum::http::header::AUTHORIZATION)?
@@ -45,18 +45,19 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Префикс токена удалённого MCP. Разбор по префиксу, а не перебор обеих
-/// таблиц: иначе каждый неверный ключ стоил бы двух запросов, а «ключ» и
-/// «токен» смешались бы в отчётах об отказах.
+/// The prefix of a remote MCP token. Dispatch by prefix rather than trying both
+/// tables: otherwise every wrong key would cost two queries, and "key" and
+/// "token" would blur together in the refusal reports.
 pub const OAUTH_ACCESS_PREFIX: &str = "ntkat_";
 
 pub async fn resolve(
     client: &deadpool_postgres::Client,
     key: &str,
 ) -> anyhow::Result<Option<Actor>> {
-    // Личность одна, способов её предъявить два: долгий ключ (CLI, флот) и
-    // короткоживущий токен OAuth (Claude Desktop по HTTP). Разводить их на два
-    // пути авторизации значит однажды закрыть дыру в одном и оставить в другом.
+    // One identity, two ways to present it: a long-lived key (CLI, fleet) and
+    // a short-lived OAuth token (Claude Desktop over HTTP). Splitting them into
+    // two authorisation paths means one day closing a hole in one and leaving
+    // it open in the other.
     if key.starts_with(OAUTH_ACCESS_PREFIX) {
         return crate::mcp_oauth::actor_from_token(client, key).await;
     }
@@ -69,13 +70,13 @@ pub async fn resolve(
     let Some(r) = rows.first() else {
         return Ok(None);
     };
-    // Отмечаем использование. Без этого «живой» и «мёртвый» ключ выглядят
-    // одинаково, и решение об отзыве принимается вслепую — я на этом уже
-    // ошибся, отзывая ключ по признаку, которого не существовало.
+    // Record the use. Without it a live key and a dead one look the same, and
+    // a revocation decision is taken blind — I already got that wrong once,
+    // revoking a key on the strength of a signal that did not exist.
     //
-    // Пишем не на каждый запрос, а раз в час: точность до часа отвечает на
-    // вопрос «пользуются ли им», а запись на каждый вызов превратила бы
-    // чтение в запись на самом горячем пути.
+    // Written once an hour rather than on every request: hour precision answers
+    // "is anyone using it", while writing on every call would turn a read into
+    // a write on the hottest path.
     let _ = client
         .execute(
             "update core.user_keys set last_used_at = now()
