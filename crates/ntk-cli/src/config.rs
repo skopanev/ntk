@@ -137,8 +137,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saving_keeps_what_the_old_client_needs() {
+    fn an_old_config_reads_and_loses_the_notion_leftovers() {
         // Форма рабочего конфига JS-версии: воркспейсы с токенами Notion.
+        //
+        // Раньше этот тест требовал ОБРАТНОГО — чтобы запись сохраняла чужие
+        // поля, потому что тем же файлом владел работающий JS-клиент. Гарантия
+        // снята сознательно вместе с полем rest (коммит «Notion уходит из
+        // дерева»): JS-клиента больше нет, и уборка протухших токенов Notion с
+        // чужих машин — не побочный ущерб, а смысл.
+        //
+        // Тест переписан, а не удалён: без него ничто не закрепляет, что старый
+        // конфиг всё ещё ЧИТАЕТСЯ без ошибки. Прочитать и не упасть — важно;
+        // сохранять чужое — больше нет.
         let raw = r#"{
             "default_workspace": "default",
             "workspaces": { "ftk": { "token": "ntn_secret", "database_id": "db" } }
@@ -148,7 +158,13 @@ mod tests {
         assert_eq!(cfg.url, default_url());
 
         let written = serde_json::to_string(&cfg).unwrap();
-        assert!(written.contains("ntn_secret"), "токен Notion потерян при записи: {written}");
-        assert!(written.contains("default_workspace"), "поле старого клиента потеряно: {written}");
+        assert!(
+            !written.contains("ntn_secret"),
+            "токен Notion обязан уйти с диска при записи: {written}"
+        );
+        assert!(
+            !written.contains("default_workspace"),
+            "поля JS-клиента больше не сохраняются: {written}"
+        );
     }
 }

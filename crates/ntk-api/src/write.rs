@@ -612,11 +612,9 @@ pub async fn patch(
         .await;
     // Долг — до commit и в той же транзакции. Правка, не изменившая
     // отправляемый текст (приоритет, исполнитель, срок), долга не создаёт.
-    if r.is_ok() {
-        if let Err(e) = enqueue_upsert(&tx, &id).await {
-            tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
-        }
+    if let (Ok(_), Err(e)) = (&r, enqueue_upsert(&tx, &id).await) {
+        tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
     }
     match r {
         Ok(_) if tx.commit().await.is_ok() => {
@@ -2018,18 +2016,19 @@ pub(crate) async fn enqueue_upsert(
     tx: &deadpool_postgres::Transaction<'_>,
     id: &str,
 ) -> anyhow::Result<bool> {
-    if !vector_enabled(tx).await {
+    if !vector_enabled(tx).await? {
         return Ok(false);
     }
     let Some(row) = tx
         .query_opt(
-            "select title, body from tickets where id = $1 and deleted_at is null",
+            "select title, body, uuid::text from tickets where id = $1 and deleted_at is null",
             &[&id],
         )
         .await?
     else {
         return Ok(false);
     };
+    let uuid: String = row.get(2);
     let sha = embed_sha(&embed_input(&row.get::<_, String>(0), &row.get::<_, String>(1)));
 
     // Уже в индексе с тем же отпечатком и без висящего долга — делать нечего.
@@ -2046,12 +2045,12 @@ pub(crate) async fn enqueue_upsert(
     }
 
     tx.execute(
-        "insert into vector_debt (ticket_id, op, input_sha, attempts, last_error, queued_at)
-         values ($1, 'upsert', $2, 0, null, now())
+        "insert into vector_debt (ticket_id, uuid, op, input_sha, attempts, last_error, queued_at)
+         values ($1, $3, 'upsert', $2, 0, null, now())
          on conflict (ticket_id) do update
-            set op = 'upsert', input_sha = excluded.input_sha,
+            set op = 'upsert', input_sha = excluded.input_sha, uuid = excluded.uuid,
                 attempts = 0, last_error = null, queued_at = now()",
-        &[&id, &sha],
+        &[&id, &sha, &uuid],
     )
     .await?;
     Ok(true)
@@ -2065,28 +2064,48 @@ pub(crate) async fn enqueue_delete(
     tx: &deadpool_postgres::Transaction<'_>,
     id: &str,
 ) -> anyhow::Result<bool> {
-    if !vector_enabled(tx).await {
+    if !vector_enabled(tx).await? {
         return Ok(false);
     }
+    // uuid берём здесь, пока строка тикета доступна: долг обязан уметь снести
+    // точку и после того, как строки не станет.
+    let uuid: Option<String> = tx
+        .query_opt("select uuid::text from tickets where id = $1", &[&id])
+        .await?
+        .map(|r| r.get(0));
     tx.execute(
-        "insert into vector_debt (ticket_id, op, input_sha, attempts, last_error, queued_at)
-         values ($1, 'delete', null, 0, null, now())
+        "insert into vector_debt (ticket_id, uuid, op, input_sha, attempts, last_error, queued_at)
+         values ($1, $2, 'delete', null, 0, null, now())
          on conflict (ticket_id) do update
-            set op = 'delete', input_sha = null,
+            set op = 'delete', input_sha = null, uuid = coalesce(excluded.uuid, vector_debt.uuid),
                 attempts = 0, last_error = null, queued_at = now()",
-        &[&id],
+        &[&id, &uuid],
     )
     .await?;
     Ok(true)
 }
 
-pub(crate) async fn vector_enabled(tx: &deadpool_postgres::Transaction<'_>) -> bool {
-    tx.query_opt("select enabled from vector_policy where only_row", &[])
-        .await
-        .ok()
-        .flatten()
+/// Читает политику и НЕ глотает ошибку.
+///
+/// Раньше здесь стоял .ok(), и отсутствие таблицы превращалось в «выключено».
+/// В Postgres ошибка запроса аборти́рует транзакцию, поэтому пропустить запись
+/// это не давало — но давало хуже: если бинарь выкатили раньше, чем миграции
+/// прошли по схеме, КАЖДЫЙ create, patch и remove этого воркспейса отвечал 500
+/// «внутренняя ошибка» БЕЗ единой строки в журнале о причине. Мой лог про долг
+/// не срабатывал (ошибки-то не было, было false), а падал уже commit с
+/// абстрактным «transaction is aborted».
+///
+/// Теперь причина доходит: в журнале будет «relation vector_policy does not
+/// exist». Исход тот же 500, но искать его не придётся вслепую. Нашёл
+/// glm-ntk-reviewer.
+pub(crate) async fn vector_enabled(
+    tx: &deadpool_postgres::Transaction<'_>,
+) -> anyhow::Result<bool> {
+    Ok(tx
+        .query_opt("select enabled from vector_policy where only_row", &[])
+        .await?
         .map(|r| r.get(0))
-        .unwrap_or(false)
+        .unwrap_or(false))
 }
 
 #[cfg(test)]

@@ -206,6 +206,7 @@ async fn one(
     ticket_id: &str,
     op: &str,
     debt_sha: Option<String>,
+    debt_uuid: Option<String>,
 ) -> Result<()> {
     let mut client = pool.get().await.context("база недоступна")?;
 
@@ -228,9 +229,13 @@ async fn one(
                 r.get::<_, String>(3),
                 r.get::<_, bool>(4),
             ),
-            // Тикета нет вовсе — удалять в Qdrant нечего по uuid, которого мы
-            // не знаем. Долг снимаем, иначе он останется навсегда.
+            // Тикета нет вовсе. Раньше здесь долг просто снимался, и точка
+            // оставалась в Qdrant навсегда: uuid жил только в удалённой строке.
+            // Теперь его несёт сам долг, поэтому призрака можно снести.
             None => {
+                if let Some(u) = &debt_uuid {
+                    v.delete_point(u).await?;
+                }
                 clear_debt(pool, ws, ticket_id).await?;
                 return Ok(());
             }
@@ -344,8 +349,12 @@ pub async fn enabled_workspaces(pool: &deadpool_postgres::Pool) -> Result<Vec<St
         let ws: String = r.get(0);
         let mut c = pool.get().await?;
         let Ok(tx) = crate::db::begin(&mut c, &ws).await else { continue };
-        if crate::write::vector_enabled(&tx).await {
-            out.push(ws);
+        // Ошибку чтения политики не глотаем и здесь: воркспейс без миграций
+        // не «выключен», он неизвестен, и молча пропустить его нельзя.
+        match crate::write::vector_enabled(&tx).await {
+            Ok(true) => out.push(ws.clone()),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(error = %e, workspace = %ws, "политика векторизации не прочиталась"),
         }
         tx.commit().await.ok();
     }
@@ -385,14 +394,14 @@ pub async fn drain(v: Arc<Vector>, pool: deadpool_postgres::Pool) {
                 break;
             }
             let mut tasks = Vec::new();
-            for (id, op, sha) in batch {
+            for (id, op, sha, uuid) in batch {
                 let v = v.clone();
                 let pool = pool.clone();
                 let ws = ws.clone();
                 let slots = v.slots.clone();
                 tasks.push(tokio::spawn(async move {
                     let _slot = slots.acquire().await;
-                    let r = one(&v, &pool, &ws, &id, &op, sha).await;
+                    let r = one(&v, &pool, &ws, &id, &op, sha, uuid).await;
                     if let Err(e) = &r {
                         // Отказ провайдера не откатывает SQL и не теряет долг:
                         // считаем попытку и оставляем на следующий проход.
@@ -427,12 +436,12 @@ pub async fn drain(v: Arc<Vector>, pool: deadpool_postgres::Pool) {
 async fn take_batch(
     pool: &deadpool_postgres::Pool,
     ws: &str,
-) -> Result<Vec<(String, String, Option<String>)>> {
+) -> Result<Vec<(String, String, Option<String>, Option<String>)>> {
     let mut c = pool.get().await?;
     let tx = crate::db::begin(&mut c, ws).await?;
     let rows = tx
         .query(
-            "select ticket_id, op, input_sha from vector_debt
+            "select ticket_id, op, input_sha, uuid from vector_debt
               where attempts < 5 order by queued_at limit 8",
             &[],
         )
@@ -440,7 +449,7 @@ async fn take_batch(
     tx.commit().await.ok();
     Ok(rows
         .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
         .collect())
 }
 

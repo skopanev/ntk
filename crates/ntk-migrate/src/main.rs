@@ -38,6 +38,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("020_vector_debt", include_str!("../../../sql/020_vector_debt.sql")),
     ("021_vector_enable_seeds", include_str!("../../../sql/021_vector_enable_seeds.sql")),
     ("022_vector_seed_schema_fix", include_str!("../../../sql/022_vector_seed_schema_fix.sql")),
+    ("023_vector_debt_survives_ticket", include_str!("../../../sql/023_vector_debt_survives_ticket.sql")),
+    ("024_vector_seed_carries_uuid", include_str!("../../../sql/024_vector_seed_carries_uuid.sql")),
 ];
 
 #[tokio::main]
@@ -69,6 +71,23 @@ async fn main() -> Result<()> {
             eprintln!("соединение с базой разорвано: {e}");
         }
     });
+
+    // Кодировка базы обязана быть UTF8.
+    //
+    // От неё зависит равенство двух вычислений одного отпечатка: триггер засева
+    // считает sha256 от convert_to(..., 'UTF8'), а сервис — от байтов Rust-строки,
+    // которые всегда UTF-8. В базе с другой кодировкой convert_to дало бы другие
+    // байты на любом не-ASCII символе, отпечатки разошлись бы, и всё
+    // переиндексировалось бы вечно — молча, потому что оба вычисления «работают».
+    // Проверку предложил glm-ntk-reviewer как единственную оставшуюся предпосылку.
+    let enc: String = client.query_one("show server_encoding", &[]).await?.get(0);
+    if enc != "UTF8" {
+        bail!(
+            "кодировка базы {enc}, а нужна UTF8: иначе отпечаток входа для \
+             векторизации считается по-разному в SQL и в сервисе, и индекс \
+             переписывается бесконечно"
+        );
+    }
 
     let role: String = client.query_one("select current_user", &[]).await?.get(0);
     if role != "ntk_admin" {
