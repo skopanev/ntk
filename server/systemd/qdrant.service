@@ -1,0 +1,32 @@
+[Unit]
+Description=Qdrant для векторизации ntk
+After=network.target
+
+[Service]
+Type=simple
+User=qdrant
+Group=qdrant
+Environment=QDRANT__CONFIG_PATH=/etc/qdrant/config.yaml
+WorkingDirectory=/var/lib/qdrant
+ExecStart=/opt/qdrant/qdrant --config-path /etc/qdrant/config.yaml
+Restart=always
+RestartSec=2
+
+# Коробка на 2 ГБ, и рядом Postgres. Потолок памяти обязателен: без него
+# первый же тяжёлый проход заберёт её у базы, а OOM-killer выберет не то.
+MemoryMax=384M
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+# Наружу не ходит и снаружи не слушает: только петля.
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/var/lib/qdrant
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

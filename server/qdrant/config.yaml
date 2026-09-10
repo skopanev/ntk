@@ -1,0 +1,19 @@
+# Qdrant для векторизации ntk. Истина — SQL, здесь кеш векторов.
+storage:
+  storage_path: /var/lib/qdrant/storage
+  snapshots_path: /var/lib/qdrant/snapshots
+  # Векторы на диске: на коробке 2 ГБ и одно ядро, рядом Postgres и ntk-api.
+  # 4096 измерений на 6000 тикетов — это 95 МБ в памяти без нужды.
+  on_disk_payload: true
+  performance:
+    # Одно ядро: несколько потоков поиска отняли бы его у Postgres и API.
+    max_search_threads: 1
+    max_optimization_threads: 1
+service:
+  # ТОЛЬКО loopback. Наружу торчит один Caddy на 443, и это свойство ломать
+  # нельзя: в README оно записано как главное про изоляцию базы.
+  host: 127.0.0.1
+  http_port: 6333
+  grpc_port: 6334
+  # Ключ не нужен, пока слушаем только петлю; появится, если это изменится.
+telemetry_disabled: true

@@ -31,6 +31,7 @@ API, а с базой разговаривает только API по localhost
 | Ресурсы | 1 vCPU, 2 ГБ RAM, 48 ГБ NVMe |
 | Postgres | 16.15 |
 | Caddy | 2.11.4 |
+| Qdrant | 1.19.1 — векторный индекс для векторизации воркспейсов |
 | Node | **не нужен** — `ntk-api` собирается на Rust, см. `release.sh` |
 
 Тариф 2 ГБ выбран не из-за объёма данных (365 тикетов весят мегабайты), а из-за
@@ -95,6 +96,8 @@ sudo -u postgres psql -c "alter role ntk_api with password '<новый>'"
 | `postgres/pg_hba.conf` | только локальные подключения, внешних строк нет |
 | `caddy/Caddyfile` | автоматический TLS, реверс-прокси на `localhost:8080` |
 | `systemd/ntk-api.service` | юнит сервиса; бинарь кладёт `release.sh` в `/opt/ntk/bin` |
+| `systemd/qdrant.service` | векторный индекс; только петля, потолок памяти 384 МБ |
+| `qdrant/config.yaml` | хранилище, петля, один поток поиска и оптимизации |
 | `systemd/ntk-backup.{service,timer}` | ночной дамп, 03:17 UTC |
 | `backup/pg_backup.sh` | `pg_dump` custom-формата в Spaces через curl `--aws-sigv4` |
 | `backup/restore-verify.sh` | разворачивает последний дамп и проверяет данные |
@@ -144,6 +147,35 @@ sudo -u postgres psql -c "alter role ntk_api with password '<новый>'"
 | `HTTP 502` на `https://$DOMAIN/` | сервис не запущен: `systemctl status ntk-api` |
 | Бэкап в Spaces | дамп загружен, скачан и восстановлен |
 | `ntk-backup.timer` | активен, следующий прогон 03:17 UTC |
+
+## Qdrant
+
+Ставится статическим бинарём с релизов, без Docker: на коробке его нет, а
+тянуть его ради одного процесса дороже, чем положить файл.
+
+```bash
+useradd --system --home /var/lib/qdrant --shell /usr/sbin/nologin qdrant
+install -d -o qdrant -g qdrant -m 750 /var/lib/qdrant /opt/qdrant /etc/qdrant
+curl -fsSL -o q.tar.gz \
+  https://github.com/qdrant/qdrant/releases/download/v1.19.1/qdrant-x86_64-unknown-linux-musl.tar.gz
+tar xzf q.tar.gz && install -m 755 qdrant /opt/qdrant/qdrant
+install -m 640 -o qdrant -g qdrant qdrant/config.yaml /etc/qdrant/config.yaml
+install -m 644 systemd/qdrant.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now qdrant
+```
+
+Три свойства, которые обязаны выполняться, и их проверка:
+
+```bash
+ss -lntp | grep 633            # только 127.0.0.1, никаких 0.0.0.0
+curl -s localhost:6333/healthz # healthz check passed
+curl --max-time 5 http://<ip>:6333/healthz   # снаружи соединения быть НЕ должно
+```
+
+Потолок памяти в юните не украшение: коробка на 2 ГБ и рядом Postgres. Без
+`MemoryMax` первый же тяжёлый проход заберёт память у базы, а OOM-killer
+выберет не то. Векторы лежат на диске по той же причине — 4096 измерений на
+шесть тысяч тикетов это 95 МБ, которые незачем держать в оперативной памяти.
 
 ## Порядок развёртывания
 
