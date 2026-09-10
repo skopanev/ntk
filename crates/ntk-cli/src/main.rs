@@ -217,6 +217,18 @@ enum Cmd {
         body: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_find", "id"))]
         id: Option<String>,
+        #[arg(short = 's', long, help = ntk_core::tools::arg("ntk_find", "status"))]
+        status: Option<String>,
+        #[arg(short = 't', long, help = ntk_core::tools::arg("ntk_find", "tag"))]
+        tag: Option<String>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_find", "strict"))]
+        strict: bool,
+        #[arg(short = 'a', long, help = ntk_core::tools::arg("ntk_find", "assignee"))]
+        assignee: Option<String>,
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_find", "project"))]
+        project: Option<String>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_find", "module"))]
+        module: Option<String>,
         #[arg(short = 'n', long, help = ntk_core::tools::arg("ntk_find", "limit"))]
         limit: Option<i64>,
         #[arg(long, help = ntk_core::tools::arg("ntk_find", "min_score"))]
@@ -288,8 +300,10 @@ async fn main() -> Result<()> {
         Cmd::Rm { id, yes } => rm(id, ws, yes).await,
         Cmd::Modules { project, replace, add, stdin, json } =>
             modules(ws, project, replace, add, stdin, json).await,
-        Cmd::Find { text, body, id, limit, min_score, json } =>
-            find(ws, text, body, id, limit, min_score, json).await,
+        Cmd::Find { text, body, id, status, tag, strict, assignee, project, module, limit, min_score, json } =>
+            find(ws, text, body, id,
+                 api::Filters { status, tag, title: None, assignee, project, module, strict, all: true, stale: None },
+                 limit, min_score, json).await,
         Cmd::Meta { json } => meta(ws, json).await,
         Cmd::Whoami => whoami().await,
         Cmd::Mcp => serve_mcp().await,
@@ -1055,6 +1069,7 @@ async fn find(
     text: Option<String>,
     body: Option<String>,
     id: Option<String>,
+    f: api::Filters,
     limit: Option<i64>,
     min_score: Option<f64>,
     json: bool,
@@ -1077,6 +1092,13 @@ async fn find(
     if let Some(v) = id { req["id"] = v.into(); }
     if let Some(v) = limit { req["limit"] = v.into(); }
     if let Some(v) = min_score { req["min_score"] = v.into(); }
+    // Отбор уходит теми же именами, что у списка: одно понятие — одно имя.
+    if let Some(v) = f.status { req["status"] = v.into(); }
+    if let Some(v) = f.tag { req["tag"] = v.into(); }
+    if f.strict { req["strict"] = true.into(); }
+    if let Some(v) = f.assignee { req["assignee"] = v.into(); }
+    if let Some(v) = f.project { req["project"] = v.into(); }
+    if let Some(v) = f.module { req["module"] = v.into(); }
 
     let v = api::Client::new(&cfg.url).similar(key, &ws, &req).await?;
     if json {

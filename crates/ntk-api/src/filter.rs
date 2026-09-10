@@ -28,7 +28,13 @@ pub struct Filters {
 /// The bound values. Kept apart from the query string because the arguments
 /// have to outlive its use.
 pub struct Bound {
-    pub status: Option<String>,
+    /// Статусы списком, а не одним значением.
+    ///
+    /// В `ls` многостатусный отбор был сделан мимо этого модуля, своим куском
+    /// кода, — то есть путей отбора стало два, ровно то, от чего этот модуль и
+    /// заводился. Список живёт здесь, и `find` получает его тем же способом,
+    /// что список и обход.
+    pub statuses: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
     pub title: Option<String>,
     pub assignee: Option<String>,
@@ -43,8 +49,11 @@ impl Filters {
         let tags: Option<Vec<String>> = self.tag.as_deref().map(|t| {
             t.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
         });
+        let statuses: Option<Vec<String>> = self.status.as_deref().map(|t| {
+            t.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
+        });
         Bound {
-            status: self.status.clone(),
+            statuses: statuses.filter(|v: &Vec<String>| !v.is_empty()),
             tags: tags.filter(|v: &Vec<String>| !v.is_empty()),
             title: self.title.clone(),
             assignee: match (&self.assignee, self.all) {
@@ -67,7 +76,7 @@ impl Filters {
         if let Some(v) = &self.project { p.push(format!("project {v}")); }
         if let Some(v) = &self.module { p.push(format!("module {v}")); }
         if let Some(v) = &self.tag { p.push(format!("tag {v}{}", if self.strict { " exactly" } else { "" })); }
-        if let Some(v) = &self.title { p.push(format!("заголовок «{v}»")); }
+        if let Some(v) = &self.title { p.push(format!("title {v:?}")); }
         if self.all { p.push("everyone's, not just mine".into()); }
         if p.is_empty() { "no filter".into() } else { p.join(", ") }
     }
@@ -84,9 +93,11 @@ pub fn apply<'a>(
     args: &mut Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>,
     b: &'a Bound,
 ) {
-    if b.status.is_some() {
-        args.push(&b.status);
-        sql.push_str(&format!(" and status = ${}", args.len()));
+    if b.statuses.is_some() {
+        // `= any(...)` вместо цепочки «или»: одно условие, и частичный индекс
+        // по статусу остаётся применимым.
+        args.push(&b.statuses);
+        sql.push_str(&format!(" and status = any(${})", args.len()));
     }
     if b.assignee.is_some() {
         args.push(&b.assignee);

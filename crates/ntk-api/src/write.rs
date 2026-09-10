@@ -724,6 +724,20 @@ pub struct SimilarQ {
     /// Искать похожих на УЖЕ существующий тикет.
     #[serde(default)]
     id: Option<String>,
+    /// Отбор — тот же, что у списка: статусы через запятую, теги, исполнитель,
+    /// проект, модуль. По умолчанию ищем во ВСЕХ статусах и у всех.
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    strict: bool,
+    #[serde(default)]
+    assignee: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    module: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
     #[serde(default)]
@@ -837,7 +851,28 @@ pub async fn similar(
     // первым с оценкой 1.0, и без запаса выдача была бы короче заказанной.
     let ask = if exclude.is_some() { limit + 1 } else { limit };
 
-    match crate::vector::similar(&v, &app.pool, &ws, &text, &body, ask, min).await {
+    // `all: true` — по умолчанию ищем у ВСЕХ, а не только своё: дубль заводят
+    // поверх чужого тикета чаще, чем поверх своего.
+    let filters = crate::filter::Filters {
+        status: p.status.clone(),
+        tag: p.tag.clone(),
+        strict: p.strict,
+        title: None,
+        assignee: p.assignee.clone(),
+        project: p.project.clone(),
+        module: p.module.clone(),
+        all: p.assignee.is_none(),
+    };
+    let bound = filters.bind("");
+    let narrowed = p.status.is_some() || p.tag.is_some() || p.assignee.is_some()
+        || p.project.is_some() || p.module.is_some();
+
+    match crate::vector::similar(
+        &v, &app.pool, &ws, &text, &body, ask, min,
+        narrowed.then_some(&bound),
+    )
+    .await
+    {
         Ok(hits) => {
             let out: Vec<_> = hits
                 .into_iter()
@@ -899,6 +934,9 @@ pub async fn create(
                     &body,
                     crate::vector::SIMILAR_LIMIT,
                     min_score,
+                    // На заведении отбора нет намеренно: дубль закрытого тикета
+                    // — самое ценное, что здесь можно сказать.
+                    None,
                 )
                 .await
                 {

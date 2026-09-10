@@ -75,6 +75,12 @@ pub struct SimilarArgs {
     pub text: Option<String>,
     pub body: Option<String>,
     pub id: Option<String>,
+    pub status: Option<String>,
+    pub tag: Option<String>,
+    pub strict: Option<bool>,
+    pub assignee: Option<String>,
+    pub project: Option<String>,
+    pub module: Option<String>,
     pub limit: Option<i64>,
     pub min_score: Option<f64>,
 }
@@ -538,6 +544,12 @@ impl Ntk {
         if let Some(v) = a.id { req["id"] = v.into(); }
         if let Some(v) = a.limit { req["limit"] = v.into(); }
         if let Some(v) = a.min_score { req["min_score"] = v.into(); }
+        if let Some(v) = a.status { req["status"] = v.into(); }
+        if let Some(v) = a.tag { req["tag"] = v.into(); }
+        if a.strict.unwrap_or(false) { req["strict"] = true.into(); }
+        if let Some(v) = a.assignee { req["assignee"] = v.into(); }
+        if let Some(v) = a.project { req["project"] = v.into(); }
+        if let Some(v) = a.module { req["module"] = v.into(); }
         let v = c.similar(&key, &a.workspace, &req).await.map_err(oops)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&v).map_err(oops)?,

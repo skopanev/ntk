@@ -423,13 +423,25 @@ pub async fn similar(
     body: &str,
     limit: usize,
     min_score: f64,
+    filter: Option<&crate::filter::Bound>,
 ) -> Result<Vec<Similar>> {
     let input = crate::write::embed_input(title, body);
     if input.trim().is_empty() {
         return Ok(Vec::new());
     }
     let vector = v.embed(&input).await?;
-    let hits = v.search(vector, ws, limit, min_score).await?;
+    // Статус отбирается в SQL, а не в Qdrant, и это не лень.
+    //
+    // Нагрузка точки могла бы нести статус — и врала бы: статус меняется каждый
+    // день, а точка переписывается только при смене ТЕКСТА. Отбор по ней
+    // прятал бы тикеты, которые давно открыли заново, и показывал бы закрытые
+    // как открытые. Поэтому Qdrant отвечает «на кого смотреть», а годится ли
+    // он — решает база.
+    //
+    // Цена — просить с запасом: отбор срежет часть выдачи, и без запаса вместо
+    // пяти вернулось бы два. Пятикратный, с потолком, чтобы запрос не разрастался.
+    let ask = if filter.is_some() { (limit * 5).min(100) } else { limit };
+    let hits = v.search(vector, ws, ask, min_score).await?;
     if hits.is_empty() {
         return Ok(Vec::new());
     }
@@ -437,13 +449,18 @@ pub async fn similar(
     let ids: Vec<String> = hits.iter().map(|(id, _)| id.clone()).collect();
     let mut c = pool.get().await?;
     let tx = crate::db::begin(&mut c, ws).await?;
-    let rows = tx
-        .query(
-            "select id, title, status, project_id from tickets
-              where id = any($1) and deleted_at is null",
-            &[&ids],
-        )
-        .await?;
+    // Отбор — тот же, что у списка и обхода, из общего модуля. Свой набор
+    // условий здесь означал бы, что «тег infra» в find и в ls понимаются
+    // по-разному, и узнать об этом можно было бы только случайно.
+    let mut sql = String::from(
+        "select id, title, status, project_id from tickets
+          where id = any($1) and deleted_at is null",
+    );
+    let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&ids];
+    if let Some(b) = filter {
+        crate::filter::apply(&mut sql, &mut args, b);
+    }
+    let rows = tx.query(&sql, &args).await?;
     tx.commit().await.ok();
 
     let mut live: std::collections::HashMap<String, (String, String, Option<String>)> =
@@ -459,6 +476,8 @@ pub async fn similar(
             let (title, status, project) = live.remove(&id)?;
             Some(Similar { id, score, title, status, project })
         })
+        // Запас, взятый ради отбора, наружу не отдаём.
+        .take(limit)
         .collect())
 }
 

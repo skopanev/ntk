@@ -309,7 +309,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             if let Some(w) = &ws {
                 q["workspace"] = json!(w);
             }
-            for k in ["text", "body", "id"] {
+            for k in ["text", "body", "id", "status", "tag", "assignee", "project", "module"] {
                 if let Some(v) = s(args, k) {
                     q[k] = json!(v);
                 }
@@ -319,6 +319,9 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             }
             if let Some(v) = args.get("min_score").and_then(|v| v.as_f64()) {
                 q["min_score"] = json!(v);
+            }
+            if args.get("strict").and_then(|v| v.as_bool()).unwrap_or(false) {
+                q["strict"] = json!(true);
             }
             match serde_json::from_value(q) {
                 Ok(parsed) => body_text(write::similar(st, h, Json(parsed)).await).await,
