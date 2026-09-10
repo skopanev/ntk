@@ -688,6 +688,14 @@ pub struct Create {
     #[serde(default)]
     deps: Vec<String>,
     module: Option<String>,
+    /// Не искать похожих перед заведением.
+    ///
+    /// По умолчанию заведение СНАЧАЛА ищет тикеты про то же самое и отказывает,
+    /// если находит: агент, заводящий дубль, обычно не знает, что дубль, и
+    /// сказать ему об этом можно только в ответе на его же действие. Флаг —
+    /// осознанный обход, а не удобство.
+    #[serde(default)]
+    skip_search: bool,
 }
 
 /// Заведение тикета.
@@ -696,6 +704,143 @@ pub struct Create {
 /// do nothing` вернёт ноль строк, и клиент сгенерирует другой хвост и
 /// повторит. Проверка коллизий чтением всей базы уходит вместе с Notion — она
 /// стоила 26 запросов и всё равно имела окно гонки между чтением и записью.
+/// Запрос похожих. Текст приходит телом, а не в строке запроса: тело тикета
+/// доходит до двух тысяч символов, и в URL ему не место.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SimilarQ {
+    workspace: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    /// Искать похожих на УЖЕ существующий тикет.
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    min_score: Option<f64>,
+}
+
+/// Сколько похожих отдаём максимум. Двадцать — уже не «похожие», а полки.
+const SIMILAR_MAX: usize = 20;
+
+/// Похожие тикеты.
+///
+/// Отказ, а не пустой список, когда векторизация выключена: пустой список
+/// читается как «ничего похожего нет», то есть как разрешение заводить. Разница
+/// между «искал и не нашёл» и «не искал» здесь стоит дубля в очереди.
+pub async fn similar(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(p): Json<SimilarQ>,
+) -> Response {
+    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(v) = app.vector.clone() else {
+        return oops(
+            StatusCode::CONFLICT,
+            "поиск похожих недоступен: у сервиса нет ключа на векторизацию",
+        );
+    };
+
+    // Текст: либо присланный, либо взятый у существующего тикета.
+    let (title, body, exclude) = if let Some(id) = p.id.as_deref() {
+        if p.title.is_some() || p.body.is_some() {
+            return oops(
+                StatusCode::BAD_REQUEST,
+                "id и текст вместе не принимаются: либо похожие на тикет, либо на присланный текст",
+            );
+        }
+        let tx = match db::begin(&mut client, &ws).await {
+            Ok(t) => t,
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        };
+        let enabled = match vector_enabled(&tx).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(error = %e, workspace = %ws, "политика векторизации не прочиталась");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            }
+        };
+        if !enabled {
+            return oops(
+                StatusCode::CONFLICT,
+                "в этом воркспейсе векторизация выключена: искать не по чему",
+            );
+        }
+        let canonical = match canonical_id(&tx, id).await {
+            Some(c) => c,
+            None => return oops(StatusCode::NOT_FOUND, "тикета нет"),
+        };
+        let row = tx
+            .query_opt(
+                "select title, body from tickets where id = $1 and deleted_at is null",
+                &[&canonical],
+            )
+            .await;
+        let Ok(Some(r)) = row else {
+            return oops(StatusCode::NOT_FOUND, "тикета нет");
+        };
+        // Берём ТЕКУЩИЙ текст, а не вектор из индекса: индекс мог отстать, и
+        // тогда искали бы похожих на прошлую редакцию тикета.
+        let t: String = r.get(0);
+        let b: String = r.get(1);
+        tx.commit().await.ok();
+        (t, b, Some(canonical))
+    } else {
+        let tx = match db::begin(&mut client, &ws).await {
+            Ok(t) => t,
+            Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
+        };
+        let enabled = match vector_enabled(&tx).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(error = %e, workspace = %ws, "политика векторизации не прочиталась");
+                return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+            }
+        };
+        tx.commit().await.ok();
+        if !enabled {
+            return oops(
+                StatusCode::CONFLICT,
+                "в этом воркспейсе векторизация выключена: искать не по чему",
+            );
+        }
+        let t = p.title.unwrap_or_default();
+        let b = p.body.unwrap_or_default();
+        if t.trim().is_empty() && b.trim().is_empty() {
+            return oops(StatusCode::BAD_REQUEST, "нужен текст или id тикета");
+        }
+        (t, b, None)
+    };
+    drop(client);
+
+    let limit = p.limit.unwrap_or(crate::vector::SIMILAR_LIMIT as i64).clamp(1, SIMILAR_MAX as i64) as usize;
+    let min = p.min_score.unwrap_or(crate::vector::NEAR_DUPLICATE).clamp(0.0, 1.0);
+    // Просим на один больше, когда ищем похожих на тикет: сам он найдётся
+    // первым с оценкой 1.0, и без запаса выдача была бы короче заказанной.
+    let ask = if exclude.is_some() { limit + 1 } else { limit };
+
+    match crate::vector::similar(&v, &app.pool, &ws, &title, &body, ask, min).await {
+        Ok(hits) => {
+            let out: Vec<_> = hits
+                .into_iter()
+                .filter(|h| Some(&h.id) != exclude.as_ref())
+                .take(limit)
+                .collect();
+            (StatusCode::OK, Json(json!({ "similar": out }))).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, workspace = %ws, "поиск похожих не удался");
+            oops(StatusCode::BAD_GATEWAY, "поиск похожих сейчас недоступен")
+        }
+    }
+}
+
 pub async fn create(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -708,6 +853,68 @@ pub async fn create(
     if p.title.trim().is_empty() {
         return oops(StatusCode::BAD_REQUEST, "у тикета должен быть заголовок");
     }
+
+    // Поиск похожих ДО заведения — и до открытия транзакции: обращение к
+    // провайдеру занимает секунды, а транзакция, открытая на это время, держала
+    // бы соединение и блокировки впустую.
+    let searching = if p.skip_search { None } else { app.vector.clone() };
+    if let Some(v) = searching {
+            let enabled = {
+                match db::begin(&mut client, &ws).await {
+                    Ok(tx) => {
+                        let e = vector_enabled(&tx).await;
+                        tx.commit().await.ok();
+                        match e {
+                            Ok(e) => e,
+                            Err(err) => {
+                                tracing::error!(error = %err, workspace = %ws, "политика векторизации не прочиталась");
+                                false
+                            }
+                        }
+                    }
+                    Err(_) => false,
+                }
+            };
+            if enabled {
+                let body = p.body.clone().unwrap_or_default();
+                match crate::vector::similar(
+                    &v,
+                    &app.pool,
+                    &ws,
+                    &p.title,
+                    &body,
+                    crate::vector::SIMILAR_LIMIT,
+                    crate::vector::NEAR_DUPLICATE,
+                )
+                .await
+                {
+                    Ok(hits) if !hits.is_empty() => {
+                        tracing::info!(
+                            workspace = %ws,
+                            found = hits.len(),
+                            "заведение остановлено: похожие уже есть"
+                        );
+                        return (
+                            StatusCode::CONFLICT,
+                            Json(json!({
+                                "error": "похоже, это уже заведено. Посмотрите список: если это та же работа — правьте существующий тикет; если нет — пришлите skip_search: true",
+                                "similar": hits
+                            })),
+                        )
+                            .into_response();
+                    }
+                    Ok(_) => {}
+                    // Провайдер лёг — заводим. Иначе его отказ останавливал бы
+                    // всю работу команды, а цена ошибки здесь несравнима:
+                    // пропущенный дубль правится, ненаведённый тикет теряется.
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        workspace = %ws,
+                        "похожих не искал, завожу как есть"
+                    ),
+                }
+            }
+        }
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,

@@ -174,6 +174,104 @@ impl Vector {
         Ok(())
     }
 
+    /// Поиск по вектору внутри одного воркспейса.
+    ///
+    /// Фильтр по воркспейсу обязателен и стоит в самом запросе, а не в разборе
+    /// ответа: коллекция одна на все воркспейсы, и «отфильтруем потом» здесь
+    /// значит «однажды не отфильтруем». Возвращаем идентификаторы тикетов и
+    /// оценку, а не сами тикеты: содержимое берётся из SQL, где оно
+    /// единственно верное.
+    async fn search(
+        &self,
+        vector: Vec<f32>,
+        ws: &str,
+        limit: usize,
+        min_score: f64,
+    ) -> Result<Vec<(String, f64)>> {
+        let body = serde_json::json!({
+            "vector": vector,
+            "limit": limit,
+            "score_threshold": min_score,
+            "with_payload": true,
+            "filter": { "must": [{ "key": "workspace", "match": { "value": ws } }] }
+        });
+        let r = self
+            .http
+            .post(format!("{}/collections/{COLLECTION}/points/search", self.qdrant))
+            .json(&body)
+            .send()
+            .await
+            .context("qdrant недоступен")?;
+        let code = r.status();
+        let v: serde_json::Value = r.json().await.context("ответ qdrant не разобрался")?;
+        if !code.is_success() {
+            bail!("поиск не удался: {code} {v}");
+        }
+        Ok(v["result"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|h| {
+                        Some((
+                            h["payload"]["ticket_id"].as_str()?.to_string(),
+                            h["score"].as_f64().unwrap_or(0.0),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Все точки воркспейса: идентификатор точки и тикета.
+    ///
+    /// Страницами: коллекция одна на все воркспейсы, и «возьмём сразу все»
+    /// однажды упрётся в память там, где никто не смотрит.
+    async fn all_points(&self, ws: &str) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        let mut offset: Option<serde_json::Value> = None;
+        loop {
+            let mut body = serde_json::json!({
+                "limit": 256,
+                "with_payload": true,
+                "with_vector": false,
+                "filter": { "must": [{ "key": "workspace", "match": { "value": ws } }] }
+            });
+            if let Some(o) = &offset {
+                body["offset"] = o.clone();
+            }
+            let r = self
+                .http
+                .post(format!("{}/collections/{COLLECTION}/points/scroll", self.qdrant))
+                .json(&body)
+                .send()
+                .await
+                .context("qdrant недоступен")?;
+            let code = r.status();
+            let v: serde_json::Value = r.json().await.context("ответ qdrant не разобрался")?;
+            if !code.is_success() {
+                bail!("обход точек не удался: {code} {v}");
+            }
+            let page = v["result"]["points"].as_array().cloned().unwrap_or_default();
+            for p in &page {
+                let (Some(id), Some(tid)) = (
+                    p["id"].as_str().map(str::to_string),
+                    p["payload"]["ticket_id"].as_str().map(str::to_string),
+                ) else {
+                    continue;
+                };
+                out.push((id, tid));
+            }
+            match v["result"]["next_page_offset"].clone() {
+                serde_json::Value::Null => break,
+                next => offset = Some(next),
+            }
+            if page.is_empty() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     async fn delete_point(&self, uuid: &str) -> Result<()> {
         let r = self
             .http
@@ -187,6 +285,190 @@ impl Vector {
         }
         Ok(())
     }
+}
+
+/// Порог, выше которого тикет считаем возможным дублем.
+///
+/// Косинус, поэтому 1.0 — тот же текст. Значение ИЗМЕРЕНО на 30 боевых тикетах
+/// воркспейса test, а не выбрано на глаз — первая версия стояла на 0.85 «по
+/// здравому смыслу», и замер её опроверг:
+///
+/// | что                                          | оценка    |
+/// |----------------------------------------------|-----------|
+/// | пересказ тикета своими словами (дубль)       | 0.78–0.80 |
+/// | худшая пара из 130 среди НЕ дублей           | 0.7631    |
+/// | соседняя работа в том же модуле              | ~0.50     |
+/// | совсем другая тема                           | ~0.36     |
+///
+/// То есть 0.85 не поймал бы НИ ОДНОГО настоящего дубля. Зазор между худшим
+/// не-дублем и лучшим дублем — 0.015, и это узко: короткий текст нового тикета
+/// сравнивается с обрезанными до 2000 символов телами старых, а короткое с
+/// длинным всегда даёт оценку ниже. Поэтому порог — параметр вызова, а это
+/// лишь значение по умолчанию.
+pub const NEAR_DUPLICATE: f64 = 0.75;
+
+/// Сколько похожих показываем. Больше пяти читать никто не станет.
+pub const SIMILAR_LIMIT: usize = 5;
+
+/// Похожий тикет: оценка из Qdrant, всё остальное — из SQL.
+#[derive(Debug, serde::Serialize)]
+pub struct Similar {
+    pub id: String,
+    pub score: f64,
+    pub title: String,
+    pub status: String,
+    pub project: Option<String>,
+}
+
+/// Похожие на данный текст тикеты воркспейса.
+///
+/// Выдача СВЕРЯЕТСЯ с SQL и там же наполняется: точка в Qdrant могла отстать —
+/// тикет удалили или переписали, а вектор ещё старый. Отдать заголовок из
+/// нагрузки точки значило бы показывать то, чего уже нет, и с уверенным видом.
+/// Поэтому Qdrant отвечает только «на кого смотреть», а что показать —
+/// решает база.
+pub async fn similar(
+    v: &Vector,
+    pool: &deadpool_postgres::Pool,
+    ws: &str,
+    title: &str,
+    body: &str,
+    limit: usize,
+    min_score: f64,
+) -> Result<Vec<Similar>> {
+    let input = crate::write::embed_input(title, body);
+    if input.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let vector = v.embed(&input).await?;
+    let hits = v.search(vector, ws, limit, min_score).await?;
+    if hits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let ids: Vec<String> = hits.iter().map(|(id, _)| id.clone()).collect();
+    let mut c = pool.get().await?;
+    let tx = crate::db::begin(&mut c, ws).await?;
+    let rows = tx
+        .query(
+            "select id, title, status, project_id from tickets
+              where id = any($1) and deleted_at is null",
+            &[&ids],
+        )
+        .await?;
+    tx.commit().await.ok();
+
+    let mut live: std::collections::HashMap<String, (String, String, Option<String>)> =
+        std::collections::HashMap::new();
+    for r in &rows {
+        live.insert(r.get(0), (r.get(1), r.get(2), r.get(3)));
+    }
+    // Порядок оставляем от Qdrant — он по убыванию похожести, а SQL про
+    // похожесть ничего не знает.
+    Ok(hits
+        .into_iter()
+        .filter_map(|(id, score)| {
+            let (title, status, project) = live.remove(&id)?;
+            Some(Similar { id, score, title, status, project })
+        })
+        .collect())
+}
+
+/// Сверка Qdrant с SQL по СОСТАВУ, а не по числу.
+///
+/// Совпадение количеств ничего не доказывает: один призрак и один
+/// непроиндексированный тикет дают то же число. Проверено на живом — в
+/// воркспейсе test точек было 29 при 28 отметках, и лишней оказалась точка
+/// тикета, СТРОКИ которого в базе уже нет: он был удалён физически ещё до
+/// того, как долг научился переживать удаление тикета. Долга нет, поднять
+/// нечем, сам по себе такой призрак не уйдёт никогда — он и остался бы в
+/// выдаче поиска навсегда.
+///
+/// Направления два, и оба обязательны: точка без живого тикета удаляется,
+/// живой тикет без точки получает долг.
+pub async fn reconcile(
+    v: &Vector,
+    pool: &deadpool_postgres::Pool,
+    ws: &str,
+) -> Result<(usize, usize)> {
+    let points = v.all_points(ws).await?;
+
+    let mut c = pool.get().await?;
+    let tx = crate::db::begin(&mut c, ws).await?;
+    let rows = tx
+        .query("select id, uuid::text from tickets where deleted_at is null", &[])
+        .await?;
+    let live: std::collections::HashMap<String, String> =
+        rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+
+    let have: std::collections::HashSet<&str> =
+        points.iter().map(|(_, t)| t.as_str()).collect();
+    let missing: Vec<(&String, &String)> =
+        live.iter().filter(|(id, _)| !have.contains(id.as_str())).collect();
+    // Долг ставим одной транзакцией, пока она открыта: тикет, дописанный в эту
+    // же секунду, поставит свой долг сам и перезапишет наш — это правильно, его
+    // отпечаток свежее.
+    for (id, uuid) in &missing {
+        tx.execute(
+            "insert into vector_debt (ticket_id, uuid, op, input_sha, attempts, queued_at)
+             values ($1, $2, 'upsert', null, 0, now())
+             on conflict (ticket_id) do nothing",
+            &[id, uuid],
+        )
+        .await?;
+    }
+    let seeded = missing.len();
+    tx.commit().await?;
+    drop(c);
+
+    let mut removed = 0usize;
+    for (point, ticket) in &points {
+        if live.contains_key(ticket) {
+            continue;
+        }
+        v.delete_point(point).await?;
+        removed += 1;
+        tracing::info!(workspace = %ws, ticket = %ticket, "убрал призрака: тикета нет в базе");
+    }
+    Ok((removed, seeded))
+}
+
+/// Сверка по расписанию.
+///
+/// Раз в шесть часов, а не при каждом пробуждении: она обходит ВСЕ точки
+/// воркспейса, и делать это на каждую запись значило бы платить обходом за
+/// правку одного тикета. Первая — через минуту после старта, чтобы не мешать
+/// разбору долга, оставшегося с прошлого запуска.
+pub fn reconcile_ticks(state: &Arc<crate::App>) {
+    let Some(v) = state.vector.clone() else { return };
+    let pool = state.pool.clone();
+    let st = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        loop {
+            match enabled_workspaces(&pool).await {
+                Ok(list) => {
+                    for ws in list {
+                        match reconcile(&v, &pool, &ws).await {
+                            Ok((0, 0)) => {}
+                            Ok((removed, seeded)) => {
+                                tracing::warn!(
+                                    workspace = %ws, removed, seeded,
+                                    "сверка нашла расхождение"
+                                );
+                                if seeded > 0 {
+                                    wake(&st);
+                                }
+                            }
+                            Err(e) => tracing::warn!(error = %e, workspace = %ws, "сверка не удалась"),
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "сверка: воркспейсы не перечислились"),
+            }
+            tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
 }
 
 /// Один долг: посчитать, записать, ПРОВЕРИТЬ и только потом закрыть.

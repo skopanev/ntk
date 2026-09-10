@@ -114,6 +114,8 @@ enum Cmd {
         deps: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_create", "module"))]
         module: Option<String>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_create", "skip_search"))]
+        skip_search: bool,
         #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
@@ -205,6 +207,21 @@ enum Cmd {
         #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
+    #[command(about = ntk_core::tools::about("ntk_similar"), long_about = ntk_core::tools::desc("ntk_similar"))]
+    Similar {
+        #[arg(help = ntk_core::tools::arg("ntk_similar", "title"))]
+        title: Option<String>,
+        #[arg(short = 'b', long, help = ntk_core::tools::arg("ntk_similar", "body"))]
+        body: Option<String>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_similar", "id"))]
+        id: Option<String>,
+        #[arg(short = 'n', long, help = ntk_core::tools::arg("ntk_similar", "limit"))]
+        limit: Option<i64>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_similar", "min_score"))]
+        min_score: Option<f64>,
+        #[arg(long, help = "Print JSON instead of a table.")]
+        json: bool,
+    },
     #[command(about = ntk_core::tools::about("ntk_meta"), long_about = ntk_core::tools::desc("ntk_meta"))]
     Meta {
         #[arg(long, help = "Print JSON instead of a table.")]
@@ -259,8 +276,8 @@ async fn main() -> Result<()> {
         Cmd::Show { id, json } => show(id, ws, json).await,
         Cmd::Next { prefer, tag, strict, project, module, has_module, assignee, dry_run, json } =>
             next(ws, prefer, tag, strict, project, module, has_module, assignee, dry_run, json).await,
-        Cmd::Create { title, project, priority, assignee, kind, status, tags, body, deps, module, json } =>
-            create(title, ws, project, priority, assignee, kind, status, tags, body, deps, module, json).await,
+        Cmd::Create { title, project, priority, assignee, kind, status, tags, body, deps, module, skip_search, json } =>
+            create(title, ws, project, priority, assignee, kind, status, tags, body, deps, module, skip_search, json).await,
         Cmd::Close { id, force } => close(id, ws, force).await,
         Cmd::Update { id, status, title, body, append, assignee, tags, deps, priority, kind, project, due, module, force } =>
             update(id, ws, status, title, body, append, assignee, tags, deps, priority, kind, project, due, module, force).await,
@@ -269,6 +286,8 @@ async fn main() -> Result<()> {
         Cmd::Rm { id, yes } => rm(id, ws, yes).await,
         Cmd::Modules { project, replace, add, stdin, json } =>
             modules(ws, project, replace, add, stdin, json).await,
+        Cmd::Similar { title, body, id, limit, min_score, json } =>
+            similar(ws, title, body, id, limit, min_score, json).await,
         Cmd::Meta { json } => meta(ws, json).await,
         Cmd::Whoami => whoami().await,
         Cmd::Mcp => serve_mcp().await,
@@ -613,6 +632,7 @@ async fn create(
     body: Option<String>,
     deps: Option<String>,
     module: Option<String>,
+    skip_search: bool,
     json: bool,
 ) -> Result<()> {
     // Проект из .ntkrc, если не задан флагом: он там уже записан, и требовать
@@ -650,6 +670,7 @@ async fn create(
         "body": body,
         "deps": split(deps.clone()),
         "module": module,
+        "skip_search": skip_search,
     });
     let id = client
         .create(key, &ws, &payload)
@@ -914,6 +935,50 @@ async fn rm(id: String, workspace: Option<String>, yes: bool) -> Result<()> {
     if !waiting.is_empty() {
         println!("на нём стояли: {}", waiting.join(", "));
     }
+    Ok(())
+}
+
+/// Похожие тикеты. Ничего не меняет.
+#[allow(clippy::too_many_arguments)]
+async fn similar(
+    workspace: Option<String>,
+    title: Option<String>,
+    body: Option<String>,
+    id: Option<String>,
+    limit: Option<i64>,
+    min_score: Option<f64>,
+    json: bool,
+) -> Result<()> {
+    let cfg = config::load()?;
+    let key = config::require_key(&cfg)?;
+    let ws = workspace
+        .or_else(config::workspace_from_rc)
+        .context("не указан воркспейс: задайте -W или workspace в .ntkrc")?;
+    if id.is_some() && (title.is_some() || body.is_some()) {
+        anyhow::bail!("либо --id, либо текст: вместе не принимаются");
+    }
+    if id.is_none() && title.is_none() && body.is_none() {
+        anyhow::bail!("нужен текст заголовка или --id тикета");
+    }
+
+    let mut req = serde_json::json!({});
+    if let Some(v) = title { req["title"] = v.into(); }
+    if let Some(v) = body { req["body"] = v.into(); }
+    if let Some(v) = id { req["id"] = v.into(); }
+    if let Some(v) = limit { req["limit"] = v.into(); }
+    if let Some(v) = min_score { req["min_score"] = v.into(); }
+
+    let v = api::Client::new(&cfg.url).similar(key, &ws, &req).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    let hits = v.get("similar").and_then(|s| s.as_array()).cloned().unwrap_or_default();
+    if hits.is_empty() {
+        println!("похожих не нашлось");
+        return Ok(());
+    }
+    println!("{}", api::render_similar(&hits));
     Ok(())
 }
 

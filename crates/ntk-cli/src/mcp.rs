@@ -69,6 +69,16 @@ pub struct WsArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SimilarArgs {
+    pub workspace: String,
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub id: Option<String>,
+    pub limit: Option<i64>,
+    pub min_score: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ModulesArgs {
     pub workspace: String,
     // Проект. Без него — модули всех проектов воркспейса.
@@ -167,6 +177,7 @@ pub struct CreateArgs {
     pub kind: Option<String>,
     // Идентификаторы тикетов, которых этот ждёт.
     pub deps: Option<Vec<String>>,
+    pub skip_search: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -414,6 +425,7 @@ impl Ntk {
         if let Some(v) = a.status { body["status"] = v.into(); }
         if let Some(v) = a.kind { body["type"] = v.into(); }
         if let Some(v) = a.deps { body["deps"] = v.into(); }
+        if a.skip_search.unwrap_or(false) { body["skip_search"] = true.into(); }
 
         match c.create(&key, &a.workspace, &body).await.map_err(oops)? {
             Some(id) => Ok(CallToolResult::success(vec![Content::text(id)])),
@@ -505,6 +517,27 @@ impl Ntk {
             format!("{} убран; на нём стояли: {}", a.id, blocked.join(", "))
         };
         Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool]
+    async fn ntk_similar(&self, Parameters(a): Parameters<SimilarArgs>) -> Result<CallToolResult, McpError> {
+        if a.id.is_some() && (a.title.is_some() || a.body.is_some()) {
+            return Err(oops("либо id, либо текст: вместе не принимаются"));
+        }
+        if a.id.is_none() && a.title.is_none() && a.body.is_none() {
+            return Err(oops("нужен текст или id тикета"));
+        }
+        let (c, key) = Self::client().await?;
+        let mut req = serde_json::json!({});
+        if let Some(v) = a.title { req["title"] = v.into(); }
+        if let Some(v) = a.body { req["body"] = v.into(); }
+        if let Some(v) = a.id { req["id"] = v.into(); }
+        if let Some(v) = a.limit { req["limit"] = v.into(); }
+        if let Some(v) = a.min_score { req["min_score"] = v.into(); }
+        let v = c.similar(&key, &a.workspace, &req).await.map_err(oops)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&v).map_err(oops)?,
+        )]))
     }
 
     #[tool]

@@ -35,6 +35,7 @@ pub const BODY_MAX: usize = 2000;
 pub enum Ty {
     Str,
     Int,
+    Num,
     Bool,
     StrList,
 }
@@ -90,6 +91,7 @@ impl Tool {
             let ty = match f.ty {
                 Ty::Str => "string",
                 Ty::Int => "integer",
+                Ty::Num => "number",
                 Ty::Bool => "boolean",
                 Ty::StrList => "array",
             };
@@ -326,7 +328,7 @@ pub const ALL: &[Tool] = &[
         cli: "create",
         title: "Create ticket",
         about: "Create a ticket.",
-        desc: "Create a ticket. The server assigns the identifier. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment. Write tickets in English.",
+        desc: "Create a ticket. The server assigns the identifier. Where vectorisation is switched on, this first looks for tickets that already say the same thing and REFUSES if it finds one, listing what it found; pass skip_search=true to file anyway. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment. Write tickets in English.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -342,6 +344,7 @@ pub const ALL: &[Tool] = &[
             Field::opt("status", Ty::Str, "Starting status. Without it the server takes the first one in the todo group."),
             KIND,
             Field::opt("deps", Ty::StrList, "Identifiers of the tickets this one waits for."),
+            Field::opt("skip_search", Ty::Bool, "File the ticket without looking for existing ones that already say the same thing. Where vectorisation is switched on, creating searches first and REFUSES if it finds a likely duplicate, listing what it found; set this to file anyway. Read the list before you set it — the point of the stop is that the work may already be in the queue."),
         ],
     },
     Tool {
@@ -431,6 +434,24 @@ pub const ALL: &[Tool] = &[
         destructive: false,
         idempotent: true,
         fields: &[WS],
+    },
+    Tool {
+        name: "ntk_similar",
+        cli: "similar",
+        title: "Find similar tickets",
+        about: "Find tickets that already say the same thing.",
+        desc: "Find tickets whose text is close to the one given, so the same work is not filed twice. Only available where vectorisation is switched on; without it the answer is a refusal, not an empty list — an empty list would read as \"nothing like it exists\". Every hit is checked against the database before it is returned, so a ticket that was removed or rewritten cannot come back through a stale vector. Ranked by closeness, closest first.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        fields: &[
+            WS,
+            Field::opt("title", Ty::Str, "Title of the ticket you are about to file. Compared against titles and bodies together.").capped(TITLE_MAX),
+            Field::opt("body", Ty::Str, "Body of the ticket you are about to file. Only the first 2000 characters take part.").capped(BODY_MAX),
+            Field::opt("id", Ty::Str, "Look for tickets similar to THIS existing one, instead of passing text. Not accepted together with title or body."),
+            Field::opt("limit", Ty::Int, "How many to return. 5 by default, 20 at most."),
+            Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1, 0.75 by default. Measured on real tickets: a reworded duplicate scores 0.78-0.80, unrelated work about 0.50, and the closest pair among non-duplicates 0.76 — so the default sits just under the duplicates. Lower it to see more and weaker matches, raise it to see only near-identical text."),
+        ],
     },
     Tool {
         name: "ntk_modules",

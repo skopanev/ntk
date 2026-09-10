@@ -99,6 +99,9 @@ async fn main() -> anyhow::Result<()> {
     // И редкий повторный подход к тому, что не слилось из-за отказа провайдера:
     // иначе такой долг ждал бы следующей правки тикета.
     vector::retry_ticks(&app);
+    // И сверка состава: числа совпадают и при одном призраке с одним
+    // непроиндексированным тикетом, поэтому сверяем по идентификаторам.
+    vector::reconcile_ticks(&app);
     let router = Router::new()
         .route("/health", get(health))
         // Без ключа намеренно: клиент, который ещё не вошёл, тоже должен
@@ -107,6 +110,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/download", get(release::download))
         .route("/v1/me", get(whoami))
         .route("/v1/tickets", get(tickets).post(write::create))
+        // POST, а не GET: текст тикета доходит до двух тысяч символов, и в
+        // строке запроса ему не место. Ручка ничего не меняет.
+        .route("/v1/similar", axum::routing::post(write::similar))
         .route("/v1/tickets/{id}", get(ticket_one).delete(write::remove))
         .route("/v1/tickets/{id}/deps", get(write::deps))
         .route("/v1/meta", get(write::meta))

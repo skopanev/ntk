@@ -207,6 +207,9 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             for k in ["body", "assignee", "module", "priority", "status", "type"] {
                 if let Some(v) = s(args, k) { p[k] = json!(v); }
             }
+            if args.get("skip_search").and_then(|v| v.as_bool()).unwrap_or(false) {
+                p["skip_search"] = json!(true);
+            }
             if let Some(t) = args.get("tags") { p["tags"] = t.clone(); }
             if let Some(d) = args.get("deps") { p["deps"] = d.clone(); }
             match serde_json::from_value(p) {
@@ -291,6 +294,28 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                 "ntk_deps" => body_text(write::deps(st, h, Path(id), Query(qq)).await).await,
                 "ntk_rm" => body_text(write::remove(st, h, Path(id), Query(qq)).await).await,
                 _ => body_text(write::meta(st, h, Query(qq)).await).await,
+            }
+        }
+
+        "ntk_similar" => {
+            let mut q = json!({});
+            if let Some(w) = &ws {
+                q["workspace"] = json!(w);
+            }
+            for k in ["title", "body", "id"] {
+                if let Some(v) = s(args, k) {
+                    q[k] = json!(v);
+                }
+            }
+            if let Some(v) = args.get("limit").and_then(|v| v.as_i64()) {
+                q["limit"] = json!(v);
+            }
+            if let Some(v) = args.get("min_score").and_then(|v| v.as_f64()) {
+                q["min_score"] = json!(v);
+            }
+            match serde_json::from_value(q) {
+                Ok(parsed) => body_text(write::similar(st, h, Json(parsed)).await).await,
+                Err(e) => (false, e.to_string()),
             }
         }
 

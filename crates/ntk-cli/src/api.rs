@@ -290,6 +290,17 @@ impl Client {
         let code = r.status();
         let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
         if code == reqwest::StatusCode::CONFLICT {
+            // Тем же кодом отвечают две разные вещи: «не подобрался свободный
+            // идентификатор» и «похоже, это уже заведено». Различаем по списку
+            // похожих, иначе остановка на дубле читалась бы как исчерпание
+            // идентификаторов — то есть как поломка сервиса.
+            if let Some(sim) = v.get("similar").and_then(|s| s.as_array()) {
+                bail!(
+                    "{}\n{}",
+                    v.get("error").and_then(|e| e.as_str()).unwrap_or("похоже, это уже заведено"),
+                    render_similar(sim)
+                );
+            }
             return Ok(None);
         }
         if !code.is_success() {
@@ -298,6 +309,54 @@ impl Client {
         Ok(Some(v.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string()))
     }
 
+    /// Похожие тикеты. Текст уходит телом: в строке запроса ему не место.
+    pub async fn similar(
+        &self,
+        key: &str,
+        workspace: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        // Воркспейс идёт В ТЕЛЕ: ручка читает его оттуда. Параметра запроса
+        // здесь мало — на нём заведение уже один раз молча падало с «укажите
+        // workspace» при переданном воркспейсе.
+        let mut body = body.clone();
+        body["workspace"] = workspace.into();
+        let r = self
+            .http
+            .post(format!("{}/v1/similar", self.base))
+            .bearer_auth(key)
+            .json(&body)
+            .send()
+            .await
+            .context("сервис недоступен")?;
+        let code = r.status();
+        let v: serde_json::Value = r.json().await.context("ответ сервиса не разобрался")?;
+        if !code.is_success() {
+            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
+        }
+        Ok(v)
+    }
+
+}
+
+/// Список похожих человеку: оценка, идентификатор, статус, заголовок.
+pub fn render_similar(hits: &[serde_json::Value]) -> String {
+    hits.iter()
+        .map(|h| {
+            let g = |k: &str| h.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            format!(
+                "  {:.2}  {:<22} {:<12} {}",
+                h.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                g("id"),
+                g("status"),
+                g("title")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+impl Client {
     /// Сколько подходящих тикетов. Считает база: листать страницами и
     /// складывать — и медленно, и неверно, если между страницами что-то
     /// изменилось.
