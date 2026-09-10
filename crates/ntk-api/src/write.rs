@@ -916,7 +916,7 @@ pub async fn create(
                         return (
                             StatusCode::CONFLICT,
                             Json(json!({
-                                "error": "Look at these before filing. If one of them is the same work, edit it instead of creating another. If none of them is, send skip_search: true.",
+                                "error": "Look at these first. Same work — edit that ticket. Not the same — send skip_search: true.",
                                 "similar": hits
                             })),
                         )
