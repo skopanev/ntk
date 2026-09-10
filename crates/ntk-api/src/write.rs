@@ -889,9 +889,14 @@ pub async fn create(
                 .await
                 {
                     Ok(hits) if !hits.is_empty() => {
+                        // Верхняя оценка в журнал: порог выбран на тридцати
+                        // тикетах, и вторую его итерацию надо считать по
+                        // накопленному на живом объёме, а не по новому предположению.
                         tracing::info!(
                             workspace = %ws,
                             found = hits.len(),
+                            top = hits[0].score,
+                            top_ticket = %hits[0].id,
                             "заведение остановлено: похожие уже есть"
                         );
                         return (

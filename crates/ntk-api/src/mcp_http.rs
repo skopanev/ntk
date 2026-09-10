@@ -228,7 +228,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                     let Some(e) = args.get("edits") else { return (false, "не указаны edits".into()) };
                     p["tag_edits"] = e.clone();
                 }
-                _ => {
+                "ntk_update" => {
                     if args.get("body").is_some() && args.get("body_append").is_some() {
                         return (false, "body и body_append вместе не принимаются: либо заменить тело, либо дописать".into());
                     }
@@ -266,6 +266,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                         return (false, "dep_set replaces the whole set — signs do not belong here; use dep_edits to edit".into());
                     }
                 }
+                other => return (false, format!("{other} в группе, но ветки для него нет")),
             }
             // Знак у каждой правки обязателен, и проверяем его ДО записи:
             // «добавить», понятое как «заменить всё», стирает историю пометок
@@ -290,10 +291,15 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             let Ok(Query(qq)) = Query::try_from_uri(&uri.parse().unwrap()) else {
                 return (false, "не указан воркспейс".into());
             };
+            // Исчерпывающе, без `_`: имя, добавленное в группу и забытое
+            // здесь, иначе молча ответило бы ЧУЖОЙ веткой — успешным
+            // неправильным вызовом, которого не видно ни в журнале, ни тестом
+            // по тексту файла: ветка-то есть, просто не та.
             match name {
                 "ntk_deps" => body_text(write::deps(st, h, Path(id), Query(qq)).await).await,
                 "ntk_rm" => body_text(write::remove(st, h, Path(id), Query(qq)).await).await,
-                _ => body_text(write::meta(st, h, Query(qq)).await).await,
+                "ntk_meta" => body_text(write::meta(st, h, Query(qq)).await).await,
+                other => (false, format!("{other} в группе, но ветки для него нет")),
             }
         }
 
@@ -380,20 +386,22 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             if let Some(w) = &ws {
                 p["workspace"] = json!(w);
             }
-            if name == "ntk_modules_add" {
-                match serde_json::from_value(p) {
+            match name {
+                "ntk_modules_add" => match serde_json::from_value(p) {
                     Ok(parsed) => {
                         body_text(write::add_modules(st, h, Path(project), Json(parsed)).await).await
                     }
                     Err(e) => (false, e.to_string()),
-                }
-            } else {
-                match serde_json::from_value(p) {
+                },
+                "ntk_modules_replace" => match serde_json::from_value(p) {
                     Ok(parsed) => {
                         body_text(write::set_modules(st, h, Path(project), Json(parsed)).await).await
                     }
                     Err(e) => (false, e.to_string()),
-                }
+                },
+                // Не `else`: замена стирает то, чего нет в списке, и попасть в
+                // неё по недосмотру — самая дорогая ошибка в этом файле.
+                other => (false, format!("{other} в группе, но ветки для него нет")),
             }
         }
 

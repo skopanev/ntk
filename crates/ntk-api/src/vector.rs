@@ -33,6 +33,30 @@ const CONCURRENCY: usize = 4;
 const DIMS: u64 = 4096;
 
 const MODEL: &str = "Qwen/Qwen3-Embedding-8B";
+
+/// Отказ, в котором виноват ВХОД, а не мир.
+///
+/// Различие не про аккуратность отчётов, а про то, кто платит за простой.
+/// Счётчик попыток гасит долг после пяти неудач — задумано против одного
+/// битого тикета, который иначе крутился бы вечно. Но пока причина не
+/// различалась, десятиминутный обморок провайдера жёг попытки ВСЕМ долгам
+/// подряд: пять пробуждений при живом трафике — это секунды, и вся очередь
+/// уходила в мёртвые, включая заведомо здоровые тикеты.
+///
+/// Хуже, чем потеря денег: у мёртвого долга точка в Qdrant остаётся вечно
+/// старой, а по ней теперь ищут похожих. Отказ в заведении сослался бы на
+/// тикет, который давно переписан в другую сторону, — и сделал бы это с
+/// уверенным видом.
+#[derive(Debug)]
+pub struct InputFault;
+
+impl std::fmt::Display for InputFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "провайдер отверг сам вход")
+    }
+}
+
+impl std::error::Error for InputFault {}
 const COLLECTION: &str = "ntk";
 
 pub struct Vector {
@@ -118,7 +142,13 @@ impl Vector {
         let code = r.status();
         let v: serde_json::Value = r.json().await.context("ответ провайдера не разобрался")?;
         if !code.is_success() {
-            bail!("провайдер отказал: {code} {}", v.get("error").map(|e| e.to_string()).unwrap_or_default());
+            let detail = v.get("error").map(|e| e.to_string()).unwrap_or_default();
+            // 429 — это НЕ вина входа: тот же текст пройдёт, когда отпустит.
+            if code.is_client_error() && code.as_u16() != 429 {
+                return Err(anyhow::Error::new(InputFault)
+                    .context(format!("провайдер отказал: {code} {detail}")));
+            }
+            bail!("провайдер отказал: {code} {detail}");
         }
         let arr = v["data"][0]["embedding"]
             .as_array()
@@ -226,7 +256,7 @@ impl Vector {
     ///
     /// Страницами: коллекция одна на все воркспейсы, и «возьмём сразу все»
     /// однажды упрётся в память там, где никто не смотрит.
-    async fn all_points(&self, ws: &str) -> Result<Vec<(String, String)>> {
+    async fn all_points(&self, ws: &str) -> Result<Vec<(String, String, Option<String>)>> {
         let mut out = Vec::new();
         let mut offset: Option<serde_json::Value> = None;
         loop {
@@ -259,7 +289,7 @@ impl Vector {
                 ) else {
                     continue;
                 };
-                out.push((id, tid));
+                out.push((id, tid, p["payload"]["input_sha"].as_str().map(str::to_string)));
             }
             match v["result"]["next_page_offset"].clone() {
                 serde_json::Value::Null => break,
@@ -289,22 +319,35 @@ impl Vector {
 
 /// Порог, выше которого тикет считаем возможным дублем.
 ///
-/// Косинус, поэтому 1.0 — тот же текст. Значение ИЗМЕРЕНО на 30 боевых тикетах
-/// воркспейса test, а не выбрано на глаз — первая версия стояла на 0.85 «по
-/// здравому смыслу», и замер её опроверг:
+/// Косинус, поэтому 1.0 — тот же текст. Значение ИЗМЕРЕНО, и мерить пришлось
+/// дважды: первый замер я поставил не в той форме и чуть не выбрал порог по
+/// чужому распределению.
 ///
-/// | что                                          | оценка    |
-/// |----------------------------------------------|-----------|
-/// | пересказ тикета своими словами (дубль)       | 0.78–0.80 |
-/// | худшая пара из 130 среди НЕ дублей           | 0.7631    |
-/// | соседняя работа в том же модуле              | ~0.50     |
-/// | совсем другая тема                           | ~0.36     |
+/// Сравнений здесь два РАЗНЫХ, и путать их нельзя:
 ///
-/// То есть 0.85 не поймал бы НИ ОДНОГО настоящего дубля. Зазор между худшим
-/// не-дублем и лучшим дублем — 0.015, и это узко: короткий текст нового тикета
-/// сравнивается с обрезанными до 2000 символов телами старых, а короткое с
-/// длинным всегда даёт оценку ниже. Поэтому порог — параметр вызова, а это
-/// лишь значение по умолчанию.
+/// 1. Короткий текст НОВОГО тикета против тел старых. Только это и происходит
+///    на заведении, и только это управляет отказом. Замер на 30 боевых
+///    тикетах: четыре пересказа существующих тикетов своими словами дали
+///    0.7795–0.8971, одиннадцать НЕ дублей — 0.2909–0.6357, причём верхнюю
+///    границу держит самый трудный случай, какой удалось придумать: соседняя
+///    работа в том же файле («закрепить версию Bun в CI» против «два гарда не
+///    типизируются из-за отсутствия объявлений Bun»). Зазор 0.6357..0.7795,
+///    ширина 0.1439.
+/// 2. Старый тикет против старого, оба целиком. Так сравнивает только
+///    ntk_similar с --id. Там верх не-дублей выше — 0.7631 на 130 парах, —
+///    потому что длинное с длинным всегда ближе, чем короткое с длинным.
+///
+/// 0.75 стоит внутри зазора ПЕРВОГО распределения, ближе к дублям, чем
+/// середина (0.7076): промах в сторону лишней остановки дешевле промаха в
+/// сторону дубля, но запас до трудного не-дубля всё равно 0.11.
+/// Во ВТОРОМ распределении 0.75 ниже верхней кромки не-дублей — и это не
+/// ошибка: поиск по --id только показывает список, ничего не запрещая, и там
+/// лишняя строка полезнее пропущенной.
+///
+/// Тридцать тикетов — не весь свет. На воркспейсе в тысячи тикетов однотипные
+/// шаблонные заголовки уплотнят верх не-дублей, поэтому в журнал отказа пишется
+/// верхняя оценка: вторую итерацию порога считать по накопленному, а не по
+/// новому предположению.
 pub const NEAR_DUPLICATE: f64 = 0.75;
 
 /// Сколько похожих показываем. Больше пяти читать никто не станет.
@@ -395,40 +438,70 @@ pub async fn reconcile(
 
     let mut c = pool.get().await?;
     let tx = crate::db::begin(&mut c, ws).await?;
+    // Отпечаток считаем тем же выражением, что и триггер засева: разойдись они
+    // хоть в одном символе — сверка объявила бы устаревшими ВСЕ точки и
+    // переиндексировала бы воркспейс целиком, каждые шесть часов, за деньги.
     let rows = tx
-        .query("select id, uuid::text from tickets where deleted_at is null", &[])
-        .await?;
-    let live: std::collections::HashMap<String, String> =
-        rows.iter().map(|r| (r.get(0), r.get(1))).collect();
-
-    let have: std::collections::HashSet<&str> =
-        points.iter().map(|(_, t)| t.as_str()).collect();
-    let missing: Vec<(&String, &String)> =
-        live.iter().filter(|(id, _)| !have.contains(id.as_str())).collect();
-    // Долг ставим одной транзакцией, пока она открыта: тикет, дописанный в эту
-    // же секунду, поставит свой долг сам и перезапишет наш — это правильно, его
-    // отпечаток свежее.
-    for (id, uuid) in &missing {
-        tx.execute(
-            "insert into vector_debt (ticket_id, uuid, op, input_sha, attempts, queued_at)
-             values ($1, $2, 'upsert', null, 0, now())
-             on conflict (ticket_id) do nothing",
-            &[id, uuid],
+        .query(
+            "select id, uuid::text,
+                    encode(sha256(convert_to(left(title || chr(10) || body, 2000), 'UTF8')), 'hex')
+               from tickets where deleted_at is null",
+            &[],
         )
         .await?;
+    let live: std::collections::HashMap<String, (String, String)> =
+        rows.iter().map(|r| (r.get(0), (r.get(1), r.get(2)))).collect();
+
+    // Долг нужен и тем, у кого точки нет вовсе, и тем, у кого она устарела.
+    //
+    // Второе — не педантизм. Долг, вышедший из очереди по счётчику попыток,
+    // никто больше не поднимет: точка остаётся вечно старой, а по ней ищут
+    // похожих — и отказ в заведении сошлётся на тикет, который давно переписан.
+    // Поэтому здесь же сбрасываем счётчик: сверка — это второй шанс, иначе она
+    // «находит расхождение» и ничего с ним не делает.
+    let mut stale: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for (_, ticket, sha) in &points {
+        let Some((_, want)) = live.get(ticket) else { continue };
+        if sha.as_deref() != Some(want.as_str()) {
+            stale.insert(ticket.as_str(), want.as_str());
+        }
     }
-    let seeded = missing.len();
+    let have: std::collections::HashSet<&str> = points.iter().map(|(_, t, _)| t.as_str()).collect();
+
+    let mut seeded = 0usize;
+    for (id, (uuid, _)) in &live {
+        if have.contains(id.as_str()) && !stale.contains_key(id.as_str()) {
+            continue;
+        }
+        // Считаем ФАКТИЧЕСКИ поставленное: долг, уже лежащий со свежим
+        // отпечатком, трогать незачем, а цифра в журнале иначе завышалась бы
+        // на каждом проходе и читалась бы как «расхождение не чинится».
+        let n = tx
+            .execute(
+                "insert into vector_debt (ticket_id, uuid, op, input_sha, attempts, queued_at)
+                 values ($1, $2, 'upsert', null, 0, now())
+                 on conflict (ticket_id) do update
+                    set attempts = 0, last_error = null
+                  where vector_debt.attempts > 0",
+                &[id, uuid],
+            )
+            .await?;
+        seeded += n as usize;
+    }
     tx.commit().await?;
     drop(c);
 
     let mut removed = 0usize;
-    for (point, ticket) in &points {
+    for (point, ticket, _) in &points {
         if live.contains_key(ticket) {
             continue;
         }
         v.delete_point(point).await?;
         removed += 1;
         tracing::info!(workspace = %ws, ticket = %ticket, "убрал призрака: тикета нет в базе");
+    }
+    if !stale.is_empty() {
+        tracing::info!(workspace = %ws, stale = stale.len(), "точки отстали от текста");
     }
     Ok((removed, seeded))
 }
@@ -729,10 +802,19 @@ pub async fn drain(v: Arc<Vector>, pool: deadpool_postgres::Pool) {
                     let _slot = slots.acquire().await;
                     let r = one(&v, &pool, &ws, &id, &op, sha, uuid).await;
                     if let Err(e) = &r {
-                        // Отказ провайдера не откатывает SQL и не теряет долг:
-                        // считаем попытку и оставляем на следующий проход.
-                        tracing::warn!(error = %e, ticket = %id, workspace = %ws, "долг не слился");
-                        let _ = bump_attempt(&pool, &ws, &id, &e.to_string()).await;
+                        // Отказ не откатывает SQL и не теряет долг. Но попытку
+                        // засчитываем ТОЛЬКО когда виноват вход: иначе минутный
+                        // обморок провайдера уводил бы в мёртвые всю очередь
+                        // разом, а мёртвый долг — это вечно старая точка, по
+                        // которой потом ищут похожих.
+                        let input_fault = e.downcast_ref::<InputFault>().is_some();
+                        tracing::warn!(
+                            error = %e, ticket = %id, workspace = %ws, counted = input_fault,
+                            "долг не слился"
+                        );
+                        if input_fault {
+                            let _ = bump_attempt(&pool, &ws, &id, &e.to_string()).await;
+                        }
                     }
                     r.is_ok()
                 }));
@@ -790,12 +872,24 @@ async fn bump_attempt(
     // Текст ошибки обрезаем: в него попадает ответ провайдера, и он бывает
     // длинным, а таблица долга не журнал.
     let short: String = err.chars().take(300).collect();
-    tx.execute(
-        "update vector_debt set attempts = attempts + 1, last_error = $2 where ticket_id = $1",
-        &[&id, &short],
-    )
-    .await?;
+    let now: i32 = tx
+        .query_one(
+            "update vector_debt set attempts = attempts + 1, last_error = $2
+              where ticket_id = $1 returning attempts",
+            &[&id, &short],
+        )
+        .await?
+        .get(0);
     tx.commit().await?;
+    // Пятая попытка — это не «ещё одна неудача», а выход из очереди. Без
+    // отдельной строки она в журнале неотличима от четвёртой, и долг лежит
+    // молча: сверка потом «находит расхождение» и ничего с ним не делает.
+    if now >= 5 {
+        tracing::warn!(
+            ticket = %id, workspace = %ws, attempts = now, error = %short,
+            "долг вышел из очереди: больше не берётся, ждёт сверки или правки текста"
+        );
+    }
     Ok(())
 }
 
