@@ -21,44 +21,44 @@ pub struct Ntk {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LsArgs {
-    /// Воркспейс. Обязателен: значения по умолчанию нет.
+    // Воркспейс. Обязателен: значения по умолчанию нет.
     pub workspace: String,
-    /// Статус: open, in_progress, to_test, to_review, reviewed, blocked, done.
+    // Статус: open, in_progress, to_test, to_review, reviewed, blocked, done.
     pub status: Option<String>,
-    /// Сколько вернуть. По умолчанию 50, потолок 500.
+    // Сколько вернуть. По умолчанию 50, потолок 500.
     pub limit: Option<i64>,
-    /// Сколько пропустить — следующая страница.
+    // Сколько пропустить — следующая страница.
     pub offset: Option<i64>,
-    /// Показать тикеты всех, а не только свои.
+    // Показать тикеты всех, а не только свои.
     pub all: Option<bool>,
-    /// Отбор по тегам через запятую. Все перечисленные должны быть на тикете.
-    /// По умолчанию по вхождению: "infra" находит и "initiative:infra".
+    // Отбор по тегам через запятую. Все перечисленные должны быть на тикете.
+    // По умолчанию по вхождению: "infra" находит и "initiative:infra".
     pub tag: Option<String>,
-    /// Тег должен совпасть целиком, а не войти частью.
+    // Тег должен совпасть целиком, а не войти частью.
     pub strict: Option<bool>,
-    /// Отбор по исполнителю. Сильнее умолчания «мои».
+    // Отбор по исполнителю. Сильнее умолчания «мои».
     pub assignee: Option<String>,
-    /// Отбор по проекту.
+    // Отбор по проекту.
     pub project: Option<String>,
-    /// Отбор по модулю — единице работы внутри проекта.
+    // Отбор по модулю — единице работы внутри проекта.
     pub module: Option<String>,
-    /// Отбор по заголовку: вхождение подстроки, регистр не важен.
+    // Отбор по заголовку: вхождение подстроки, регистр не важен.
     pub title: Option<String>,
-    /// Вернуть только ЧИСЛО подходящих, без самих тикетов. Потолок выдачи в
-    /// 500 счёту не мешает: считает база.
+    // Вернуть только ЧИСЛО подходящих, без самих тикетов. Потолок выдачи в
+    // 500 счёту не мешает: считает база.
     pub count: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShowArgs {
-    /// Идентификатор вида proj-xxxxxxxxxx. Регистр не важен.
+    // Идентификатор вида proj-xxxxxxxxxx. Регистр не важен.
     pub id: String,
     pub workspace: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IdArgs {
-    /// Идентификатор вида proj-xxxxxxxxxx. Регистр не важен.
+    // Идентификатор вида proj-xxxxxxxxxx. Регистр не важен.
     pub id: String,
     pub workspace: String,
 }
@@ -71,7 +71,7 @@ pub struct WsArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ModulesArgs {
     pub workspace: String,
-    /// Проект. Без него — модули всех проектов воркспейса.
+    // Проект. Без него — модули всех проектов воркспейса.
     pub project: Option<String>,
 }
 
@@ -79,7 +79,7 @@ pub struct ModulesArgs {
 pub struct ModulesReplaceArgs {
     pub workspace: String,
     pub project: String,
-    /// ПОЛНЫЙ список модулей проекта. Чего в нём нет — уйдёт из действующих.
+    // ПОЛНЫЙ список модулей проекта. Чего в нём нет — уйдёт из действующих.
     pub modules: Vec<String>,
 }
 
@@ -87,8 +87,8 @@ pub struct ModulesReplaceArgs {
 pub struct ModulesAddArgs {
     pub workspace: String,
     pub project: String,
-    /// Имена, которые надо завести. Реестр ДОПОЛНЯЕТСЯ: ничего не уходит из
-    /// действующих, в отличие от замены.
+    // Имена, которые надо завести. Реестр ДОПОЛНЯЕТСЯ: ничего не уходит из
+    // действующих, в отличие от замены.
     pub add: Vec<String>,
 }
 
@@ -96,7 +96,7 @@ pub struct ModulesAddArgs {
 pub struct CloseArgs {
     pub id: String,
     pub workspace: String,
-    /// Снять гард «тикет уже подобран».
+    // Снять гард «тикет уже подобран».
     pub force: Option<bool>,
 }
 
@@ -104,64 +104,68 @@ pub struct CloseArgs {
 pub struct TagArgs {
     pub id: String,
     pub workspace: String,
-    /// Правки тегов: каждый со знаком, например ["+alpha","-legacy"].
-    /// Знак обязателен: тег без него отвергается, чтобы «добавить» не оказалось
-    /// «заменить всё».
+    // Правки тегов: каждый со знаком, например ["+alpha","-legacy"].
+    // Знак обязателен: тег без него отвергается, чтобы «добавить» не оказалось
+    // «заменить всё».
     pub edits: Vec<String>,
-    /// Снять гард «тикет уже подобран». Нужен, пока пометка тикета в работе
-    /// считается его правкой.
+    // Снять гард «тикет уже подобран». Нужен, пока пометка тикета в работе
+    // считается его правкой.
     pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct NextArgs {
     pub workspace: String,
-    /// Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр:
-    /// если по ним ничего нет, будет взят любой подходящий тикет.
-    ///
-    /// Пожелание идёт НИЖЕ блокеров: сначала срочность (своя или унаследованная
-    /// от того, что тикет разблокирует), затем «снимает блокер с начатого», и
-    /// только потом эти теги. Тикет, который держит начатую работу, не уступит
-    /// место тикету, который просто удачно помечен.
+    // Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр:
+    // если по ним ничего нет, будет взят любой подходящий тикет.
+    //
+    // Пожелание идёт НИЖЕ блокеров: сначала срочность (своя или унаследованная
+    // от того, что тикет разблокирует), затем «снимает блокер с начатого», и
+    // только потом эти теги. Тикет, который держит начатую работу, не уступит
+    // место тикету, который просто удачно помечен.
     pub prefer: Option<String>,
-    /// Отбор по тегам через запятую. В отличие от prefer ИСКЛЮЧАЕТ: не
-    /// подошло — не выдаётся вовсе.
+    // Отбор по тегам через запятую. В отличие от prefer ИСКЛЮЧАЕТ: не
+    // подошло — не выдаётся вовсе.
     pub tag: Option<String>,
-    /// Тег должен совпасть целиком, а не войти частью.
+    // Тег должен совпасть целиком, а не войти частью.
     pub strict: Option<bool>,
     pub project: Option<String>,
-    /// Отбор по конкретному модулю.
+    // Отбор по конкретному модулю.
     pub module: Option<String>,
-    /// Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы
-    /// назначена». Архивный не считается.
+    // Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы
+    // назначена». Архивный не считается.
     pub has_module: Option<bool>,
     pub assignee: Option<String>,
-    /// Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же.
-    /// Ответ — совет, а не бронь: к моменту захвата тикет может уйти другому.
+    // Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же.
+    // Ответ — совет, а не бронь: к моменту захвата тикет может уйти другому.
     pub dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateArgs {
     pub workspace: String,
-    /// Проект — префикс идентификатора тикета.
+    // Проект — префикс идентификатора тикета.
     pub project: String,
+    // Не длиннее 256 символов. Prefer English.
     pub title: String,
-    /// Тело в markdown.
+    // Тело в markdown, не длиннее 2000 символов. Prefer English.
+    //
+    // Лимит жёсткий: перебор отвергается целиком. Объём — вложением, смысл —
+    // отдельными тикетами.
     pub body: Option<String>,
-    /// Кому. Короткий идентификатор из core.users, например sk.
+    // Кому. Короткий идентификатор из core.users, например sk.
     pub assignee: Option<String>,
     pub tags: Option<Vec<String>>,
-    /// Модуль — единица работы внутри проекта. Допустимые перечисляет ntk_meta:
-    /// угадывать их не нужно и не следует. Реестр модулей есть, а назвать
-    /// модуль по MCP было НЕЧЕМ — приходилось заводить тикет без него.
+    // Модуль — единица работы внутри проекта. Допустимые перечисляет ntk_meta:
+    // угадывать их не нужно и не следует. Реестр модулей есть, а назвать
+    // модуль по MCP было НЕЧЕМ — приходилось заводить тикет без него.
     pub module: Option<String>,
     pub priority: Option<String>,
-    /// Начальный статус. Без него сервер ставит первый из группы todo.
+    // Начальный статус. Без него сервер ставит первый из группы todo.
     pub status: Option<String>,
     #[serde(rename = "type")]
     pub kind: Option<String>,
-    /// Идентификаторы тикетов, которых этот ждёт.
+    // Идентификаторы тикетов, которых этот ждёт.
     pub deps: Option<Vec<String>>,
 }
 
@@ -169,58 +173,63 @@ pub struct CreateArgs {
 pub struct UpdateArgs {
     pub workspace: String,
     pub id: String,
-    /// Новый статус. Правка тикета вне группы todo требует force.
+    // Новый статус. Правка тикета вне группы todo требует force.
     pub status: Option<String>,
+    // Новый заголовок, не длиннее 256 символов. Prefer English.
     pub title: Option<String>,
-    /// Тело целиком. ЗАМЕНЯЕТ прежнее. Чтобы добавить строку, нужен body_append.
+    // Тело целиком, не длиннее 2000 символов. ЗАМЕНЯЕТ прежнее. Чтобы
+    // добавить строку, нужен body_append. Prefer English.
     pub body: Option<String>,
-    /// Дописать в конец тела, не трогая написанное.
-    ///
-    /// Склейка идёт в базе одним UPDATE: вычитать тело, склеить у себя и
-    /// записать целиком — это и лишний повод стереть чужое, и гонка.
+    // Дописать в конец тела, не трогая написанное.
+    //
+    // Лимит 2000 считается по РЕЗУЛЬТАТУ склейки: дописать в полный тикет
+    // нельзя, и это отказ, а не молчаливая обрезка.
+    //
+    // Склейка идёт в базе одним UPDATE: вычитать тело, склеить у себя и
+    // записать целиком — это и лишний повод стереть чужое, и гонка.
     pub body_append: Option<String>,
     pub assignee: Option<String>,
-    /// Правки тегов, каждая со знаком: ["+alpha","-legacy"].
-    ///
-    /// Здесь же, а не отдельным вызовом: сервер меняет всё одной транзакцией,
-    /// а каждый лишний вызов стоит около 230 мс. Два вызова вместо одного — это
-    /// ещё и две транзакции, между которыми тикет виден наполовину изменённым.
+    // Правки тегов, каждая со знаком: ["+alpha","-legacy"].
+    //
+    // Здесь же, а не отдельным вызовом: сервер меняет всё одной транзакцией,
+    // а каждый лишний вызов стоит около 230 мс. Два вызова вместо одного — это
+    // ещё и две транзакции, между которыми тикет виден наполовину изменённым.
     pub tag_edits: Option<Vec<String>>,
-    /// Правки зависимостей, каждая со знаком: ["+proj-a1b2c3","-proj-d4e5f6"].
-    ///
-    /// Плюс — тикет НАЧИНАЕТ ждать названный; минус — перестаёт. Знак
-    /// обязателен по той же причине, что у тегов: голый список однажды
-    /// означал бы «заменить все», и связи пропадали бы молча. Цель обязана
-    /// существовать: ребро в никуда превращает «жду такой-то тикет» в
-    /// «ничего не жду», и об этом никто не узнаёт.
+    // Правки зависимостей, каждая со знаком: ["+proj-a1b2c3","-proj-d4e5f6"].
+    //
+    // Плюс — тикет НАЧИНАЕТ ждать названный; минус — перестаёт. Знак
+    // обязателен по той же причине, что у тегов: голый список однажды
+    // означал бы «заменить все», и связи пропадали бы молча. Цель обязана
+    // существовать: ребро в никуда превращает «жду такой-то тикет» в
+    // «ничего не жду», и об этом никто не узнаёт.
     pub dep_edits: Option<Vec<String>>,
-    /// ЗАМЕНИТЬ весь набор зависимостей перечисленным. Пустой список снимает
-    /// все. Отдельно от dep_edits: там знак обязателен, здесь его быть не
-    /// должно — два разных намерения в одном поле однажды стоили нам шести
-    /// потерянных тегов.
+    // ЗАМЕНИТЬ весь набор зависимостей перечисленным. Пустой список снимает
+    // все. Отдельно от dep_edits: там знак обязателен, здесь его быть не
+    // должно — два разных намерения в одном поле однажды стоили нам шести
+    // потерянных тегов.
     pub dep_set: Option<Vec<String>>,
-    /// Приоритет. Изменить его было нельзя вообще — потеряно при переписывании.
+    // Приоритет. Изменить его было нельзя вообще — потеряно при переписывании.
     pub priority: Option<String>,
     #[serde(rename = "type")]
     pub kind: Option<String>,
     pub project: Option<String>,
-    /// Срок, YYYY-MM-DD. Пустая строка снимает его.
+    // Срок, YYYY-MM-DD. Пустая строка снимает его.
     pub due: Option<String>,
-    /// Модуль. Пустая строка снимает его. При смене проекта модуль нового
-    /// проекта обязателен: молча снять его нельзя.
+    // Модуль. Пустая строка снимает его. При смене проекта модуль нового
+    // проекта обязателен: молча снять его нельзя.
     pub module: Option<String>,
-    /// Снять гард «тикет уже подобран». Ставить осознанно.
+    // Снять гард «тикет уже подобран». Ставить осознанно.
     pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WalkArgs {
-    /// Отбор по модулю — единице работы внутри проекта.
+    // Отбор по модулю — единице работы внутри проекта.
     pub module: Option<String>,
     pub workspace: String,
-    /// Идентификатор сеанса обхода. Придумайте ОДИН раз и передавайте тот же на
-    /// каждом шаге — по нему сервер помнит, что уже показано. Разные сеансы
-    /// ходят независимо, поэтому два агента не мешают друг другу.
+    // Идентификатор сеанса обхода. Придумайте ОДИН раз и передавайте тот же на
+    // каждом шаге — по нему сервер помнит, что уже показано. Разные сеансы
+    // ходят независимо, поэтому два агента не мешают друг другу.
     pub walk_id: String,
     pub status: Option<String>,
     pub tag: Option<String>,
@@ -229,7 +238,7 @@ pub struct WalkArgs {
     pub assignee: Option<String>,
     pub project: Option<String>,
     pub all: Option<bool>,
-    /// Забыть показанное и пойти сначала.
+    // Забыть показанное и пойти сначала.
     pub reset: Option<bool>,
 }
 
@@ -240,7 +249,51 @@ fn oops(e: impl std::fmt::Display) -> McpError {
 #[tool_router]
 impl Ntk {
     pub fn new() -> Self {
-        Self { tool_router: Self::tool_router() }
+        Self { tool_router: Self::describe(Self::tool_router()) }
+    }
+
+    /// Fills in the descriptions from the `ntk_core::tools` catalogue.
+    ///
+    /// This file used to carry its own, the server carried its own, and they
+    /// drifted: close, deps, rm, meta and walk were worded differently, and
+    /// three module tools existed only here. Now there is one text, and none of
+    /// it lives in this file — only the field names it is keyed by. rmcp still
+    /// derives the types and which fields are mandatory from the argument
+    /// structs themselves: it knows things about Option that the catalogue has
+    /// no business knowing.
+    fn describe(mut r: ToolRouter<Ntk>) -> ToolRouter<Ntk> {
+        for route in r.map.values_mut() {
+            let Some(t) = ntk_core::tools::get(route.attr.name.as_ref()) else {
+                continue;
+            };
+            route.attr.title = Some(t.title.to_string());
+            route.attr.description = Some(t.desc.into());
+            route.attr.annotations = Some(rmcp::model::ToolAnnotations {
+                title: Some(t.title.to_string()),
+                read_only_hint: Some(t.read_only),
+                destructive_hint: (!t.read_only).then_some(t.destructive),
+                idempotent_hint: (!t.read_only).then_some(t.idempotent),
+                open_world_hint: Some(false),
+            });
+
+            let mut schema = (*route.attr.input_schema).clone();
+            if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+                for (name, p) in props.iter_mut() {
+                    let Some(f) = t.field(name) else { continue };
+                    let Some(o) = p.as_object_mut() else { continue };
+                    if f.desc.is_empty() {
+                        o.remove("description");
+                    } else {
+                        o.insert("description".into(), serde_json::json!(f.desc));
+                    }
+                    if let Some(n) = f.max_len {
+                        o.insert("maxLength".into(), serde_json::json!(n));
+                    }
+                }
+            }
+            route.attr.input_schema = std::sync::Arc::new(schema);
+        }
+        r
     }
 
     async fn client() -> Result<(api::Client, String), McpError> {
@@ -249,9 +302,7 @@ impl Ntk {
         Ok((api::Client::new(&cfg.url), key))
     }
 
-    #[tool(description = "Кто я и какие воркспейсы доступны. Зовите ПЕРВЫМ, если \
-                          не знаете, какой workspace подставлять: у остальных \
-                          инструментов он обязателен и значения по умолчанию нет.")]
+    #[tool]
     async fn ntk_whoami(&self) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let (user, ws) = c.me(&key).await.map_err(oops)?;
@@ -261,8 +312,7 @@ impl Ntk {
         )]))
     }
 
-    #[tool(description = "Список тикетов воркспейса. По умолчанию только свои; \
-                          all=true показывает все. Ответ постранично: limit и offset.")]
+    #[tool]
     async fn ntk_ls(&self, Parameters(a): Parameters<LsArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let f = api::Filters {
@@ -290,10 +340,7 @@ impl Ntk {
         )]))
     }
 
-    #[tool(description = "Пройти тикеты по одному для проверки: показывает следующий \
-                          ещё не показанный под этим отбором и НИЧЕГО не меняет. \
-                          Не путать с ntk_next — тот берёт тикет в работу. \
-                          walk_id придумайте один раз и передавайте тот же на каждом шаге.")]
+    #[tool]
     async fn ntk_walk(&self, Parameters(a): Parameters<WalkArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let f = api::Filters {
@@ -313,7 +360,7 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(v.to_string())]))
     }
 
-    #[tool(description = "Тикет целиком: поля, тело, зависимости.")]
+    #[tool]
     async fn ntk_show(&self, Parameters(a): Parameters<ShowArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let t = c.ticket(&key, &a.workspace, &a.id).await.map_err(oops)?;
@@ -322,8 +369,7 @@ impl Ntk {
         )]))
     }
 
-    #[tool(description = "Взять следующий свободный тикет в работу. Захват атомарный: \
-                          один тикет не достанется двоим.")]
+    #[tool]
     async fn ntk_next(&self, Parameters(a): Parameters<NextArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let pick = crate::api::Pick {
@@ -345,8 +391,7 @@ impl Ntk {
         }
     }
 
-    #[tool(description = "Завести тикет. Идентификатор придумывается клиентом \
-                          и проверяется на уникальность базой.")]
+    #[tool]
     async fn ntk_create(&self, Parameters(a): Parameters<CreateArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         // Идентификатор назначает сервер. Здесь его не было вовсе, а сервер
@@ -376,10 +421,7 @@ impl Ntk {
         }
     }
 
-    #[tool(description = "Изменить тикет ОДНИМ вызовом: статус, заголовок, тело, \
-                          исполнитель и теги сразу. Меняется одной транзакцией — \
-                          тикет не бывает виден наполовину изменённым. Тикет вне \
-                          группы todo уже кем-то подобран и требует force.")]
+    #[tool]
     async fn ntk_update(&self, Parameters(a): Parameters<UpdateArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let mut body = serde_json::json!({"workspace": a.workspace});
@@ -425,8 +467,7 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(format!("{} изменён", a.id))]))
     }
 
-    #[tool(description = "Взять КОНКРЕТНЫЙ тикет в работу. Если его уже взяли, \
-                          вернётся отказ с текущим статусом, а не тишина.")]
+    #[tool]
     async fn ntk_start(&self, Parameters(a): Parameters<IdArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let t = c.start(&key, &a.workspace, &a.id).await.map_err(oops)?;
@@ -436,8 +477,7 @@ impl Ntk {
         )]))
     }
 
-    #[tool(description = "Закрыть тикет — перевести в done. Дата закрытия ставится \
-                          переходом, вручную её задать нельзя.")]
+    #[tool]
     async fn ntk_close(&self, Parameters(a): Parameters<CloseArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let mut body = serde_json::json!({"workspace": a.workspace, "status": "done"});
@@ -448,15 +488,14 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(format!("{} закрыт", a.id))]))
     }
 
-    #[tool(description = "Зависимости тикета: на чём он стоит и что стоит на нём.")]
+    #[tool]
     async fn ntk_deps(&self, Parameters(a): Parameters<IdArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let v = c.deps(&key, &a.workspace, &a.id).await.map_err(oops)?;
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&v).map_err(oops)?)]))
     }
 
-    #[tool(description = "Убрать тикет: он перестаёт показываться, но не стирается. \
-                          Настоящее удаление тихо освободило бы тех, кто его ждал.")]
+    #[tool]
     async fn ntk_rm(&self, Parameters(a): Parameters<IdArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let blocked = c.remove(&key, &a.workspace, &a.id).await.map_err(oops)?;
@@ -468,16 +507,14 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
-    #[tool(description = "Что есть в воркспейсе: статусы и их группы, приоритеты, \
-                          проекты, люди. Заменяет schema, users, projects, workspaces.")]
+    #[tool]
     async fn ntk_meta(&self, Parameters(a): Parameters<WsArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let v = c.meta(&key, &a.workspace).await.map_err(oops)?;
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&v).map_err(oops)?)]))
     }
 
-    #[tool(description = "Модули проекта. Показывает и действующие, и архивные: \
-                          архивный виден, но выбрать его для новой работы нельзя.")]
+    #[tool]
     async fn ntk_modules(&self, Parameters(a): Parameters<ModulesArgs>) -> Result<CallToolResult, McpError> {
         let (c, key) = Self::client().await?;
         let v = c.meta(&key, &a.workspace).await.map_err(oops)?;
@@ -492,7 +529,7 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&rows).map_err(oops)?)]))
     }
 
-    #[tool(description = "Завести модули проекта, НЕ трогая остальной реестр: ничего не уходит из действующих. Берите это вместо замены, когда нужно просто добавить имена.")]
+    #[tool]
     async fn ntk_modules_add(&self, Parameters(a): Parameters<ModulesAddArgs>) -> Result<CallToolResult, McpError> {
         if a.add.is_empty() {
             return Err(oops("назовите хотя бы один модуль"));
@@ -502,11 +539,7 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&v).map_err(oops)?)]))
     }
 
-    #[tool(description = "Заменить список модулей проекта целиком. Список считается \
-                          ПОЛНЫМ: модуль, которого в нём нет, уходит из действующих — \
-                          в архив, если на него ссылаются тикеты, и насовсем, если нет. \
-                          Вернувшийся в список архивный снова становится действующим. \
-                          Чтобы убрать один модуль, пришлите остальные, а не его одного.")]
+    #[tool]
     async fn ntk_modules_replace(&self, Parameters(a): Parameters<ModulesReplaceArgs>) -> Result<CallToolResult, McpError> {
         if a.modules.is_empty() {
             // Пустой список стёр бы реестр проекта. Через MCP это стоит одного
@@ -518,9 +551,7 @@ impl Ntk {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&v).map_err(oops)?)]))
     }
 
-    #[tool(description = "Только теги, ничего больше. Если меняете что-то ещё — \
-                          используйте ntk_update, он делает всё за один вызов. \
-                          Каждый тег со знаком: +добавить или -убрать.")]
+    #[tool]
     async fn ntk_tag(&self, Parameters(a): Parameters<TagArgs>) -> Result<CallToolResult, McpError> {
         for t in &a.edits {
             if !t.starts_with('+') && !t.starts_with('-') {
@@ -571,6 +602,80 @@ impl ServerHandler for Ntk {
                 ),
             ),
             ..Default::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Ntk;
+
+    /// The local surface must serve the catalogue's descriptions, not its own.
+    ///
+    /// They used to live in attributes here and separately on the server, and
+    /// drifted in silence: five tools were worded differently and three module
+    /// tools were missing over HTTP entirely. Nothing could have caught that —
+    /// now something does.
+    #[test]
+    fn descriptions_come_from_the_catalogue() {
+        let n = Ntk::new();
+        for route in n.tool_router.map.values() {
+            let name = route.attr.name.as_ref();
+            let t = ntk_core::tools::get(name)
+                .unwrap_or_else(|| panic!("{name} is missing from ntk_core::tools"));
+            assert_eq!(
+                route.attr.description.as_deref(),
+                Some(t.desc),
+                "{name}: description did not come from the catalogue"
+            );
+            assert_eq!(route.attr.title.as_deref(), Some(t.title), "{name}: title did not come from the catalogue");
+        }
+    }
+
+    /// The catalogue and the served set match in both directions.
+    #[test]
+    fn the_router_serves_exactly_the_catalogue() {
+        let n = Ntk::new();
+        let served: std::collections::BTreeSet<String> =
+            n.tool_router.map.values().map(|r| r.attr.name.to_string()).collect();
+        let listed: std::collections::BTreeSet<String> =
+            ntk_core::tools::ALL.iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(served, listed, "the served tool set drifted from the catalogue");
+    }
+
+    /// Every field in the schema is described in the catalogue.
+    ///
+    /// rmcp derives the schema from the argument structs — it knows things
+    /// about Option the catalogue need not know. But the text comes from the
+    /// catalogue, and a field missing from it would end up with no description
+    /// at all: the client would see an unnamed parameter and guess what belongs
+    /// in it.
+    #[test]
+    fn every_argument_is_described() {
+        let n = Ntk::new();
+        for route in n.tool_router.map.values() {
+            let name = route.attr.name.as_ref();
+            let t = ntk_core::tools::get(name).unwrap();
+            let Some(props) = route.attr.input_schema.get("properties").and_then(|v| v.as_object())
+            else {
+                continue;
+            };
+            for (field, spec) in props {
+                let f = t
+                    .field(field)
+                    .unwrap_or_else(|| panic!("{name}.{field} is missing from the catalogue"));
+                let got = spec.get("description").and_then(|v| v.as_str());
+                if f.desc.is_empty() {
+                    assert!(got.is_none(), "{name}.{field}: description did not come from the catalogue");
+                } else {
+                    assert_eq!(got, Some(f.desc), "{name}.{field}: description did not come from the catalogue");
+                }
+                assert_eq!(
+                    spec.get("maxLength").and_then(|v| v.as_u64()),
+                    f.max_len.map(|n| n as u64),
+                    "{name}.{field}: length limit did not come from the catalogue"
+                );
+            }
         }
     }
 }

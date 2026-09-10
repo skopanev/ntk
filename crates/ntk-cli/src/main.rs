@@ -9,11 +9,11 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ntk", about = "Тикеты: очередь агентов и людей", version)]
+#[command(name = "ntk", about = "Tickets: one queue for agents and people", version)]
 struct Cli {
-    /// Воркспейс. Можно и до команды, и после: в старом инструменте флаг был
-    /// общим, и люди набирают его по привычке впереди.
-    #[arg(short = 'W', long, global = true)]
+    // Accepted both before and after the command: in the old tool the flag was
+    // global, and people type it up front out of habit.
+    #[arg(short = 'W', long, global = true, help = ntk_core::tools::CLI_WORKSPACE.desc)]
     workspace: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
@@ -21,302 +21,221 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Вход через браузер. Ключ не вводится руками и не приходит по почте.
+    /// Sign in through the browser. The key is never typed by hand and never mailed.
     Login,
-    /// Список тикетов. По умолчанию — только свои.
+    #[command(about = ntk_core::tools::about("ntk_ls"), long_about = ntk_core::tools::desc("ntk_ls"))]
     Ls {
-        /// Воркспейс. Без него берётся из .ntkrc; догадок нет.
-        #[arg(short = 's', long)]
+        #[arg(short = 's', long, help = ntk_core::tools::arg("ntk_ls", "status"))]
         status: Option<String>,
-        /// Отбор по тегам через запятую. Все перечисленные должны быть на
-        /// тикете: «и», а не «или». По умолчанию по вхождению: "infra"
-        /// находит и "initiative:infra".
-        #[arg(short = 't', long)]
+        #[arg(short = 't', long, help = ntk_core::tools::arg("ntk_ls", "tag"))]
         tag: Option<String>,
-        /// Тег должен совпасть целиком, а не войти частью.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_ls", "strict"))]
         strict: bool,
-        /// Отбор по исполнителю. Сильнее умолчания «мои».
-        #[arg(short = 'a', long)]
+        #[arg(short = 'a', long, help = ntk_core::tools::arg("ntk_ls", "assignee"))]
         assignee: Option<String>,
-        /// Отбор по проекту.
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_ls", "project"))]
         project: Option<String>,
-        /// Отбор по модулю.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_ls", "module"))]
         module: Option<String>,
-        /// Отбор по заголовку: вхождение подстроки, регистр не важен.
-        #[arg(short = 'q', long)]
+        #[arg(short = 'q', long, help = ntk_core::tools::arg("ntk_ls", "title"))]
         title: Option<String>,
-        /// Только число подходящих, без самих тикетов. Считает база, поэтому
-        /// потолок в 500 на выдачу счёту не мешает.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_ls", "count"))]
         count: bool,
-        #[arg(short = 'n', long, default_value_t = 50)]
+        #[arg(short = 'n', long, default_value_t = 50, help = ntk_core::tools::arg("ntk_ls", "limit"))]
         limit: i64,
-        /// Пропустить первые N — следующая страница.
-        #[arg(short = 'o', long, default_value_t = 0)]
+        #[arg(short = 'o', long, default_value_t = 0, help = ntk_core::tools::arg("ntk_ls", "offset"))]
         offset: i64,
-        /// Показать тикеты всех, а не только свои.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_ls", "all"))]
         all: bool,
-        /// Вывести JSON вместо таблицы.
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Пройти тикеты по одному для проверки. Ничего не меняет.
-    ///
-    /// В отличие от next, который берёт тикет В РАБОТУ: пройти так тридцать
-    /// тикетов значит перевести их все на себя, то есть испортить очередь.
+    #[command(about = ntk_core::tools::about("ntk_walk"), long_about = ntk_core::tools::desc("ntk_walk"))]
     Walk {
-        /// Отбор по модулю.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_walk", "module"))]
         module: Option<String>,
-        #[arg(short = 's', long)]
+        #[arg(short = 's', long, help = ntk_core::tools::arg("ntk_walk", "status"))]
         status: Option<String>,
-        /// Теги через запятую. По умолчанию по вхождению.
-        #[arg(short = 't', long)]
+        #[arg(short = 't', long, help = ntk_core::tools::arg("ntk_walk", "tag"))]
         tag: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_walk", "strict"))]
         strict: bool,
-        /// Отбор по заголовку.
-        #[arg(short = 'q', long)]
+        #[arg(short = 'q', long, help = ntk_core::tools::arg("ntk_walk", "title"))]
         title: Option<String>,
-        #[arg(short = 'a', long)]
+        #[arg(short = 'a', long, help = ntk_core::tools::arg("ntk_walk", "assignee"))]
         assignee: Option<String>,
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_walk", "project"))]
         project: Option<String>,
-        /// Все, а не только свои.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_walk", "all"))]
         all: bool,
-        /// Забыть показанное и пойти сначала.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_walk", "reset"))]
         reset: bool,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Показать тикет целиком: поля, тело, зависимости.
+    #[command(about = ntk_core::tools::about("ntk_show"), long_about = ntk_core::tools::desc("ntk_show"))]
     Show {
-        /// Идентификатор. Регистр не важен.
+        #[arg(help = ntk_core::tools::arg("ntk_show", "id"))]
         id: String,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Кто я и какие воркспейсы доступны.
+    #[command(about = ntk_core::tools::about("ntk_whoami"), long_about = ntk_core::tools::desc("ntk_whoami"))]
     Whoami,
-    /// Обновиться до последней версии.
+    /// Upgrade to the latest version.
     ///
-    /// Скачанное проверяется контрольной суммой И подписью, и только потом
-    /// заменяет текущий бинарь.
+    /// What is downloaded is checked by checksum AND by signature before it
+    /// replaces the current binary.
     Upgrade,
-    /// Отдавать те же команды по MCP — для Claude Desktop и агентов.
+    /// Serve the same commands over MCP — for Claude Desktop and agents.
     ///
-    /// Говорит по stdio: клиент запускает бинарь и общается с ним через
-    /// стандартный ввод-вывод, порта и установки не требуется.
+    /// Speaks over stdio: the client starts this binary and talks to it through
+    /// standard input and output. No port, no installation.
     Mcp,
-    /// Завести тикет.
+    #[command(about = ntk_core::tools::about("ntk_create"), long_about = ntk_core::tools::desc("ntk_create"))]
     Create {
-        /// Заголовок.
+        #[arg(help = ntk_core::tools::arg("ntk_create", "title"))]
         title: String,
-        /// Проект. Он же префикс идентификатора.
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_create", "project"))]
         project: Option<String>,
-        #[arg(short = 'p', long)]
+        #[arg(short = 'p', long, help = ntk_core::tools::arg("ntk_create", "priority"))]
         priority: Option<String>,
-        #[arg(short = 'a', long)]
+        #[arg(short = 'a', long, help = ntk_core::tools::arg("ntk_create", "assignee"))]
         assignee: Option<String>,
-        #[arg(short = 'T', long = "type")]
+        #[arg(short = 'T', long = "type", help = ntk_core::tools::arg("ntk_create", "type"))]
         kind: Option<String>,
-        #[arg(short = 's', long)]
+        #[arg(short = 's', long, help = ntk_core::tools::arg("ntk_create", "status"))]
         status: Option<String>,
-        /// Теги через запятую.
-        #[arg(short = 't', long)]
+        #[arg(short = 't', long, help = "Tags, comma-separated. Creating sets the whole set at once.")]
         tags: Option<String>,
-        /// Тело тикета.
-        #[arg(short = 'b', long, short_alias = 'd')]
+        #[arg(short = 'b', long, short_alias = 'd', help = ntk_core::tools::arg("ntk_create", "body"))]
         body: Option<String>,
-        /// Идентификаторы тикетов, которых этот ждёт, через запятую.
-        #[arg(long)]
+        #[arg(long, help = "Identifiers of the tickets this one waits for, comma-separated.")]
         deps: Option<String>,
-        /// Модуль — единица работы внутри проекта. Допустимые перечисляет
-        /// `ntk meta`: угадывать их не нужно и не следует.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_create", "module"))]
         module: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Изменить тикет.
+    #[command(about = ntk_core::tools::about("ntk_update"), long_about = ntk_core::tools::desc("ntk_update"))]
     Update {
+        #[arg(help = ntk_core::tools::arg("ntk_update", "id"))]
         id: String,
-        #[arg(short = 's', long)]
+        #[arg(short = 's', long, help = ntk_core::tools::arg("ntk_update", "status"))]
         status: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_update", "title"))]
         title: Option<String>,
-        /// Тело целиком. ЗАМЕНЯЕТ прежнее — чтобы дописать, нужен -A.
-        #[arg(short = 'b', long, short_alias = 'd')]
+        #[arg(short = 'b', long, short_alias = 'd', help = ntk_core::tools::arg("ntk_update", "body"))]
         body: Option<String>,
-        /// Дописать в конец тела, не трогая написанное.
-        ///
-        /// Был в старом инструменте и потерялся при переписывании. Без него
-        /// единственный способ добавить строку — вычитать тело, склеить у себя
-        /// и записать целиком через -b, а это и лишний повод стереть чужое, и
-        /// гонка: два дописывания подряд, и одно пропадает молча.
-        #[arg(short = 'A', long)]
+        #[arg(short = 'A', long, help = ntk_core::tools::arg("ntk_update", "body_append"))]
         append: Option<String>,
-        #[arg(short = 'a', long)]
+        #[arg(short = 'a', long, help = ntk_core::tools::arg("ntk_update", "assignee"))]
         assignee: Option<String>,
-        /// Правки тегов через запятую, каждый со знаком: "+alpha,-legacy".
-        /// Знак обязателен — иначе «добавить» однажды окажется «заменить всё».
-        /// allow_hyphen_values обязателен: "-тег" иначе выглядит для разбора
-        /// как флаг, и снятие тега вообще невозможно набрать.
-        #[arg(short = 't', long = "tags", visible_alias = "tag", allow_hyphen_values = true)]
+        #[arg(short = 't', long = "tags", visible_alias = "tag", allow_hyphen_values = true, help = "Tag edits, comma-separated, each with a sign: \"+alpha,-legacy\". The sign is required, otherwise \"add\" will one day turn out to be \"replace everything\".")]
         tags: Option<String>,
-        /// Зависимости, три формы как в старом инструменте:
-        /// "a,b" — ЗАМЕНИТЬ набор целиком, "+a,-b" — добавить и снять,
-        /// "" — снять все. Смешивать формы нельзя: голый элемент рядом со
-        /// знаком однажды значил «добавить», и на этой двусмысленности
-        /// терялись связи.
-        #[arg(long = "deps", visible_alias = "dep", allow_hyphen_values = true)]
+        #[arg(long = "deps", visible_alias = "dep", allow_hyphen_values = true, help = "Dependencies, three forms: \"a,b\" REPLACES the whole set, \"+a,-b\" adds and removes, \"\" clears every one. The forms must not be mixed: a bare item next to a signed one once meant \"add\", and links were lost on that ambiguity.")]
         deps: Option<String>,
-        /// Приоритет. Изменить его было НЕЛЬЗЯ вообще — а это первое, что
-        /// правят, когда работа оказывается срочнее, чем думали.
-        #[arg(short = 'p', long)]
+        #[arg(short = 'p', long, help = ntk_core::tools::arg("ntk_update", "priority"))]
         priority: Option<String>,
-        #[arg(short = 'T', long = "type")]
+        #[arg(short = 'T', long = "type", help = ntk_core::tools::arg("ntk_update", "type"))]
         kind: Option<String>,
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_update", "project"))]
         project: Option<String>,
-        /// Срок, YYYY-MM-DD. Пустая строка снимает его.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_update", "due"))]
         due: Option<String>,
-        /// Модуль. Пустая строка снимает его. При смене проекта модуль нового
-        /// проекта обязателен: молча снять его нельзя.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_update", "module"))]
         module: Option<String>,
-        /// Менять тикет, который уже кем-то подобран.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_update", "force"))]
         force: bool,
     },
-    /// Взять конкретный тикет в работу.
+    #[command(about = ntk_core::tools::about("ntk_start"), long_about = ntk_core::tools::desc("ntk_start"))]
     Start {
+        #[arg(help = ntk_core::tools::arg("ntk_start", "id"))]
         id: String,
     },
-    /// Зависимости тикета: на чём стоит и что стоит на нём.
+    #[command(about = ntk_core::tools::about("ntk_deps"), long_about = ntk_core::tools::desc("ntk_deps"))]
     Deps {
+        #[arg(help = ntk_core::tools::arg("ntk_deps", "id"))]
         id: String,
-        /// Только то, чего тикет ждёт. Без флагов показываются обе стороны.
-        #[arg(long, conflicts_with = "down")]
+        #[arg(long, conflicts_with = "down", help = "Only what this ticket stands on.")]
         up: bool,
-        /// Только те, кто ждёт этот тикет.
-        #[arg(long)]
+        #[arg(long, help = "Only what stands on this ticket.")]
         down: bool,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Убрать тикет: он перестаёт показываться, но не стирается.
+    #[command(about = ntk_core::tools::about("ntk_rm"), long_about = ntk_core::tools::desc("ntk_rm"))]
     Rm {
+        #[arg(help = ntk_core::tools::arg("ntk_rm", "id"))]
         id: String,
-        /// Не спрашивать подтверждения.
-        #[arg(short = 'y', long)]
+        #[arg(short = 'y', long, help = "Do not ask for confirmation.")]
         yes: bool,
     },
-    /// Модули проекта: действующие и архивные.
+    #[command(about = ntk_core::tools::about("ntk_modules"), long_about = ntk_core::tools::modules_help())]
     Modules {
-        /// Проект. Без него — модули всех проектов воркспейса.
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_modules", "project"))]
         project: Option<String>,
-        /// Заменить список модулей проекта тем, что придёт со стандартного
-        /// ввода: по одному имени в строке. Список считается ПОЛНЫМ.
-        #[arg(long)]
+        #[arg(long, help = "Replace the project's module list with what arrives on standard input, one name per line. The list is taken as COMPLETE.")]
         replace: bool,
-        /// Завести названные модули, НЕ трогая остальной реестр. Ничего не
-        /// уходит из действующих — в отличие от --replace, которому нужен
-        /// полный список и который убирает всё, чего в нём нет.
-        #[arg(long, conflicts_with = "replace")]
+        #[arg(long, conflicts_with = "replace", help = "Add the named modules WITHOUT touching the rest of the registry. Nothing leaves the live set — unlike --replace, which wants the full list and removes whatever is missing from it.")]
         add: bool,
-        /// Читать список со стандартного ввода. Пишется явно, чтобы замена
-        /// набора никогда не случалась по недосмотру.
-        #[arg(long)]
+        #[arg(long, help = "Read the list from standard input. Spelled out on purpose, so that replacing a set never happens by oversight.")]
         stdin: bool,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Жизненный цикл проекта: убрать опустевшее имя из выбора и перенести
-    /// тикеты целиком.
+    /// Project lifecycle: retire an emptied name and move tickets wholesale.
     ///
-    /// Переименования нет намеренно: id проекта сидит префиксом в
-    /// идентификаторах тикетов, а те — первичные ключи. «Переименовать» здесь
-    /// значит перенести тикеты и убрать опустевшее имя, двумя шагами.
+    /// There is deliberately no rename: a project id sits as the prefix of every
+    /// ticket identifier, and those are primary keys. "Rename" here means moving
+    /// the tickets and retiring the emptied name — two steps.
     Projects {
-        /// Убрать опустевший проект из выбора. Непустой не убирается.
+        /// Retire an emptied project from the choices. A project that still has tickets is not retired.
         #[arg(long)]
         archive: Option<String>,
-        /// Вернуть проект в выбор.
+        /// Bring a project back into the choices.
         #[arg(long)]
         unarchive: Option<String>,
-        /// Перенести ВСЕ тикеты этого проекта. Требует --to.
+        /// Move ALL of this project's tickets. Requires --to.
         #[arg(long = "move")]
         move_from: Option<String>,
-        /// Куда переносить.
+        /// Where to move them.
         #[arg(long)]
         to: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Что есть в воркспейсе: статусы, приоритеты, проекты, люди.
+    #[command(about = ntk_core::tools::about("ntk_meta"), long_about = ntk_core::tools::desc("ntk_meta"))]
     Meta {
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
-    /// Закрыть тикет: перевести в done.
+    #[command(about = ntk_core::tools::about("ntk_close"), long_about = ntk_core::tools::desc("ntk_close"))]
     Close {
+        #[arg(help = ntk_core::tools::arg("ntk_close", "id"))]
         id: String,
-        /// Закрыть тикет, у которого меняется не только статус, — например
-        /// когда закрытие идёт вместе с правкой чужого тела.
-        ///
-        /// Само закрытие force НЕ требует: довести начатое до конца — обычный
-        /// путь работы, а не правка чужого в полёте.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_close", "force"))]
         force: bool,
     },
-    /// Взять следующий свободный тикет в работу.
-    ///
-    /// --prefer задаёт ПОРЯДОК предпочтения тегов, а не фильтр: когда тикеты
-    /// с первым тегом кончились, берётся следующий, и полоса не простаивает.
+    #[command(about = ntk_core::tools::about("ntk_next"), long_about = ntk_core::tools::desc("ntk_next"))]
     Next {
-        /// Теги в порядке предпочтения. ПОРЯДОК, а не отбор: если по ним
-        /// ничего нет, будет взят любой подходящий тикет.
-        ///
-        /// Пожелание НИЖЕ блокеров: сначала срочность, затем «снимает блокер
-        /// с начатого», и только потом эти теги.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_next", "prefer"))]
         prefer: Option<String>,
-        /// Отбор по тегам через запятую. В отличие от --prefer ИСКЛЮЧАЕТ:
-        /// не подошло — не выдаётся вовсе.
-        #[arg(short = 't', long)]
+        #[arg(short = 't', long, help = ntk_core::tools::arg("ntk_next", "tag"))]
         tag: Option<String>,
-        /// Тег должен совпасть целиком, а не войти частью.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_next", "strict"))]
         strict: bool,
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, help = ntk_core::tools::arg("ntk_next", "project"))]
         project: Option<String>,
-        /// Отбор по конкретному модулю.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_next", "module"))]
         module: Option<String>,
-        /// Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы
-        /// назначена». Архивный не считается — работа по нему не ведётся.
-        #[arg(long, conflicts_with = "module")]
+        #[arg(long, conflicts_with = "module", help = ntk_core::tools::arg("ntk_next", "has_module"))]
         has_module: bool,
-        #[arg(short = 'a', long)]
+        #[arg(short = 'a', long, help = ntk_core::tools::arg("ntk_next", "assignee"))]
         assignee: Option<String>,
-        /// Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же,
-        /// тикет тот же — разница только в отсутствии записи.
-        ///
-        /// Ответ здесь совет, а не бронь: к моменту захвата тикет может уже
-        /// уйти другому.
-        #[arg(long)]
+        #[arg(long, help = ntk_core::tools::arg("ntk_next", "dry_run"))]
         dry_run: bool,
-        #[arg(long)]
+        #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
 }

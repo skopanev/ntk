@@ -208,10 +208,14 @@ async fn one(
     debt_sha: Option<String>,
     debt_uuid: Option<String>,
 ) -> Result<()> {
-    let mut client = pool.get().await.context("база недоступна")?;
-
-    // Читаем состояние тикета под ролью воркспейса.
-    let (uuid, project, title, body, deleted) = {
+    // Читаем состояние тикета под ролью воркспейса — и отпускаем соединение
+    // ДО отправки к провайдеру. Раньше оно жило до конца функции: одна задача
+    // держала соединение и просила второе, а отправка занимает до 18 секунд.
+    // При четырёх задачах из шестнадцати соединений это проходило, при восьми
+    // дало бы гарантированный дедлок пула — мина ровно на «подниму
+    // параллельность».
+    let read = {
+        let mut client = pool.get().await.context("база недоступна")?;
         let tx = crate::db::begin(&mut client, ws).await?;
         let row = tx
             .query_opt(
@@ -221,24 +225,36 @@ async fn one(
             )
             .await?;
         tx.commit().await.ok();
-        match row {
-            Some(r) => (
+        row.map(|r| {
+            (
                 r.get::<_, String>(0),
                 r.get::<_, Option<String>>(1),
                 r.get::<_, String>(2),
                 r.get::<_, String>(3),
                 r.get::<_, bool>(4),
-            ),
-            // Тикета нет вовсе. Раньше здесь долг просто снимался, и точка
-            // оставалась в Qdrant навсегда: uuid жил только в удалённой строке.
-            // Теперь его несёт сам долг, поэтому призрака можно снести.
-            None => {
-                if let Some(u) = &debt_uuid {
-                    v.delete_point(u).await?;
-                }
-                clear_debt(pool, ws, ticket_id).await?;
-                return Ok(());
+            )
+        })
+    };
+
+    let (uuid, project, title, body, deleted) = match read {
+        Some(t) => t,
+        // Тикета нет вовсе. Раньше здесь долг просто снимался, и точка
+        // оставалась в Qdrant навсегда: uuid жил только в удалённой строке.
+        // Теперь его несёт сам долг, поэтому призрака можно снести.
+        None => {
+            match &debt_uuid {
+                Some(u) => v.delete_point(u).await?,
+                // После 024 недостижимо: uuid пишут все пути. Но если однажды
+                // окажется достижимо, призрак останется в Qdrant навсегда и
+                // найти его будет нечем — поэтому говорим вслух, а не молчим.
+                None => tracing::warn!(
+                    ticket = %ticket_id,
+                    workspace = %ws,
+                    "долг без uuid на исчезнувший тикет: точка, если была, осталась"
+                ),
             }
+            clear_debt(pool, ws, ticket_id).await?;
+            return Ok(());
         }
     };
 
@@ -290,6 +306,8 @@ async fn one(
                 &r.get::<_, String>(1),
             ));
             if cur == sha {
+                // Записанное в Qdrant фиксируем всегда: это правда о том, что
+                // там лежит, независимо от судьбы долга.
                 tx.execute(
                     "insert into vector_index_state (ticket_id, indexed_sha, indexed_at)
                      values ($1, $2, now())
@@ -298,7 +316,33 @@ async fn one(
                     &[&ticket_id, &sha],
                 )
                 .await?;
-                tx.execute("delete from vector_debt where ticket_id = $1", &[&ticket_id]).await?;
+                // А долг снимаем ТОЛЬКО если он всё ещё тот, который мы взяли.
+                //
+                // Безусловное удаление здесь было настоящей дырой, и хуже
+                // устаревшего вектора: правка, зафиксированная между этим
+                // SELECT и этим DELETE, ставит новый долг — и DELETE съедал
+                // именно его. Тикет оставался неиндексирован МОЛЧА, и поднять
+                // его было нечем: долга нет, будить нечего, «следующий проход»
+                // не случится никогда. READ COMMITTED тут не защищает: DELETE
+                // видит строки заново, а не снимок начала транзакции.
+                //
+                // Сверяем с тем, что прочитали при захвате, а не с посчитанным:
+                // долг с пустым отпечатком иначе не снялся бы никогда и крутил
+                // бы платную отправку по кругу.
+                let cleared = tx
+                    .execute(
+                        "delete from vector_debt
+                          where ticket_id = $1 and input_sha is not distinct from $2",
+                        &[&ticket_id, &debt_sha],
+                    )
+                    .await?;
+                if cleared == 0 {
+                    tracing::info!(
+                        ticket = %ticket_id,
+                        workspace = %ws,
+                        "долг обновился за время отправки — оставляю на следующий проход"
+                    );
+                }
             } else {
                 // Разошлось за время отправки: долг остаётся со свежим
                 // отпечатком, точка пока устаревшая — но выдача сверяется с SQL
@@ -473,16 +517,137 @@ async fn bump_attempt(
     Ok(())
 }
 
-/// Пробуждение. Если слив уже идёт, второй не запускаем: задача одна.
+/// Пробуждение. Слив один на процесс, но ни одно пробуждение не теряется.
+///
+/// Голого флага «идёт» тут не хватало. Запись, пришедшая между последним
+/// `take_batch` и снятием флага, видела «идёт» и уходила молча, а слив уже
+/// ничего не смотрел — долг оставался лежать до следующего события. Поэтому
+/// флага два: `draining` говорит, что задача есть, `vector_pending` — что
+/// появилась работа. Задача крутится, пока `vector_pending` снимается взведённым,
+/// а после освобождения `draining` ещё раз смотрит на него и при нужде забирает
+/// право обратно.
 pub fn wake(state: &Arc<crate::App>) {
+    use std::sync::atomic::Ordering::SeqCst;
     let Some(v) = state.vector.clone() else { return };
-    if state.draining.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    // Взводим ДО захвата: иначе между захватом и взводом остаётся та же щель.
+    state.vector_pending.store(true, SeqCst);
+    if state.draining.swap(true, SeqCst) {
         return;
     }
     let pool = state.pool.clone();
     let st = state.clone();
     tokio::spawn(async move {
-        drain(v, pool).await;
-        st.draining.store(false, std::sync::atomic::Ordering::SeqCst);
+        loop {
+            while st.vector_pending.swap(false, SeqCst) {
+                drain(v.clone(), pool.clone()).await;
+            }
+            st.draining.store(false, SeqCst);
+            // Освободили — и смотрим ещё раз. Если работа появилась в эту
+            // щель, её `wake` ушёл ни с чем; забираем право назад. Если право
+            // уже взял кто-то другой, он сам и разберёт: его `wake` взвёл флаг.
+            if !st.vector_pending.load(SeqCst) || st.draining.swap(true, SeqCst) {
+                break;
+            }
+        }
+    });
+}
+
+/// Пробуждение по уведомлению из базы: включение векторизации.
+///
+/// Включают её руками, `UPDATE vector_policy`, — это событие в базе, а не
+/// запрос к сервису, и процесс о нём не узнавал. Долг засевался триггером и
+/// лежал до первой чужой записи или до перезапуска: «включили» и «пошло»
+/// разъезжались на неопределённый срок.
+///
+/// Соединение здесь своё, не из пула: `LISTEN` живёт на соединении, а пул
+/// вернёт его следующему запросу — подписка потерялась бы молча, и молчание
+/// читалось бы как «уведомлений нет».
+pub fn listen(state: &Arc<crate::App>, url: String) {
+    if state.vector.is_none() {
+        return;
+    }
+    let st = state.clone();
+    tokio::spawn(async move {
+        let mut pause = Duration::from_secs(1);
+        loop {
+            match subscribe(&st, &url).await {
+                // Поток кончился без ошибки — база закрыла соединение. Подписка
+                // при этом стояла, значит с базой всё в порядке: ждём секунду,
+                // а не минуту, накопленную прошлыми отказами.
+                Ok(()) => {
+                    tracing::warn!("подписка на уведомления закрыта, переподключаюсь");
+                    pause = Duration::from_secs(1);
+                }
+                Err(e) => tracing::warn!(error = %e, "подписка на уведомления отвалилась"),
+            }
+            tokio::time::sleep(pause).await;
+            pause = (pause * 2).min(Duration::from_secs(60));
+        }
+    });
+}
+
+async fn subscribe(st: &Arc<crate::App>, url: &str) -> Result<()> {
+    use futures_util::StreamExt;
+    let (client, mut conn) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Соединение обязано крутиться, пока мы говорим с базой.
+    //
+    // Первая версия делала LISTEN до того, как начинала читать сообщения, и
+    // вставала намертво: запрос ждёт ответа, а ответ ждёт, чтобы его прочитали.
+    // Молча — ни ошибки, ни строки в журнале, просто задача, которой больше
+    // нет. Ровно тот случай, когда «ничего не написано» читается как «всё
+    // хорошо»: поймал только по отсутствию строки об установленной подписке.
+    let driver = tokio::spawn(async move {
+        let mut msgs = futures_util::stream::poll_fn(move |cx| conn.poll_message(cx));
+        while let Some(msg) = msgs.next().await {
+            match msg {
+                Ok(tokio_postgres::AsyncMessage::Notification(n)) => {
+                    if tx.send(n.payload().to_string()).is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "соединение уведомлений оборвалось");
+                    break;
+                }
+            }
+        }
+    });
+
+    client.batch_execute("LISTEN ntk_vector").await?;
+    tracing::info!("подписка на уведомления о векторизации установлена");
+    // Пока связи не было, уведомления терялись безвозвратно — их никто не
+    // хранит. Поэтому будим сразу после подписки, а не только по событию:
+    // иначе включение, попавшее в разрыв, осталось бы незамеченным.
+    wake(st);
+
+    while let Some(payload) = rx.recv().await {
+        tracing::info!(workspace = %payload, "включена векторизация");
+        wake(st);
+    }
+    driver.abort();
+    Ok(())
+}
+
+/// Повторный подход к тому, что не слилось с первого раза.
+///
+/// Отказ провайдера обрывает пачку и оставляет долг с непустым счётчиком
+/// попыток. Разбудить его нечем: записи может не быть часами, а уведомление
+/// приходит только на включение. Без этого редкая сетевая ошибка означала бы
+/// «тикет не проиндексирован до следующей правки» — то есть, возможно, никогда.
+pub fn retry_ticks(state: &Arc<crate::App>) {
+    if state.vector.is_none() {
+        return;
+    }
+    let st = state.clone();
+    tokio::spawn(async move {
+        let mut t = tokio::time::interval(Duration::from_secs(300));
+        t.tick().await; // первый срабатывает сразу, а старт уже разбудил
+        loop {
+            t.tick().await;
+            wake(&st);
+        }
     });
 }

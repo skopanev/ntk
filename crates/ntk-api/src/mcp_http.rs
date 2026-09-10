@@ -45,117 +45,17 @@ fn told_already(who: &str) -> bool {
 /// `initialize`; если она новее, мы отвечаем своей — так требует спецификация.
 const PROTOCOL: &str = "2025-06-18";
 
-/// Описания инструментов. Совпадают с локальным сервером в клиенте дословно:
-/// модель, привыкшая к одному, не должна переучиваться на другом.
+/// Tool descriptions, taken from `ntk_core::tools` — the same place the
+/// terminal and the local MCP inside the client take them from.
 ///
-/// Пометки (`annotations`) говорят клиенту, что инструмент делает: читает,
-/// пишет или разрушает. Убрать вопрос о разрешении они не могут — это решение
-/// принимает клиент на машине человека, и правильно, что не сервер, — но
-/// читающий инструмент перестаёт выглядеть как пишущий. `destructiveHint`
-/// стоит там, где вызов способен затереть уже написанное: правка тела и замена
-/// набора тегов.
+/// There used to be a separate list here, and the comment above it said it
+/// matched "the local server in the client word for word". It did not: the
+/// client had sixteen tools, this had thirteen — the three module tools were
+/// absent over HTTP entirely — and close, deps, rm, meta and walk had drifted
+/// apart in wording. A promise in a comment is checked by nothing; the
+/// catalogue is checked by a test.
 fn tools() -> Value {
-    let ws = json!({"type":"string","description":"Воркспейс. Обязателен: значения по умолчанию нет."});
-    json!([
-      {"name":"ntk_whoami",
-       "annotations":{"title":"Кто я","readOnlyHint":true,"openWorldHint":false},
-       "description":"Кто я и какие воркспейсы доступны. Зовите ПЕРВЫМ, если не знаете, какой workspace подставлять: у остальных инструментов он обязателен и значения по умолчанию нет.",
-       "inputSchema":{"type":"object","properties":{}}},
-      {"name":"ntk_ls",
-       "annotations":{"title":"Список тикетов","readOnlyHint":true,"openWorldHint":false},
-       "description":"Список тикетов воркспейса. По умолчанию только свои; all=true показывает все. Ответ постранично: limit и offset.",
-       "inputSchema":{"type":"object","required":["workspace"],"properties":{
-         "workspace":ws,
-         "status":{"type":"string","description":"open, in_progress, to_test, to_review, reviewed, blocked, done"},
-         "limit":{"type":"integer","description":"По умолчанию 50, потолок 500"},
-         "offset":{"type":"integer"},
-         "all":{"type":"boolean","description":"Показать тикеты всех, а не только свои"},
-         "tag":{"type":"string","description":"Отбор по тегам через запятую: \"alpha,ios\". Все перечисленные должны быть на тикете — «и», а не «или». По умолчанию по ВХОЖДЕНИЮ: \"infra\" находит и \"initiative:infra\"."},
-         "strict":{"type":"boolean","description":"Тег должен совпасть целиком, а не войти частью."},
-         "title":{"type":"string","description":"Отбор по заголовку: вхождение подстроки, регистр не важен."},
-         "assignee":{"type":"string","description":"Отбор по исполнителю. Сильнее умолчания «мои»."},
-         "project":{"type":"string","description":"Отбор по проекту."},
-         "count":{"type":"boolean","description":"Вернуть только ЧИСЛО подходящих. Потолок выдачи в 500 счёту не мешает: считает база."}}}},
-      {"name":"ntk_walk",
-       "annotations":{"title":"Пройти тикеты для проверки","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},
-       "description":"Пройти тикеты по одному для проверки: показывает следующий ещё не показанный под этим отбором и НИЧЕГО не меняет в тикете. Не путать с ntk_next — тот берёт тикет в работу. walk_id придумайте один раз и передавайте тот же на каждом шаге; разные сеансы ходят независимо.",
-       "inputSchema":{"type":"object","required":["workspace","walk_id"],"properties":{
-         "workspace":ws,
-         "walk_id":{"type":"string","description":"Идентификатор сеанса обхода. Один и тот же на всех шагах."},
-         "status":{"type":"string"},"tag":{"type":"string"},"strict":{"type":"boolean"},
-         "title":{"type":"string"},"assignee":{"type":"string"},"project":{"type":"string"},
-         "all":{"type":"boolean"},
-         "reset":{"type":"boolean","description":"Забыть показанное и пойти сначала."}}}},
-      {"name":"ntk_show",
-       "annotations":{"title":"Показать тикет","readOnlyHint":true,"openWorldHint":false},
-       "description":"Тикет целиком: поля, тело, зависимости.",
-       "inputSchema":{"type":"object","required":["workspace","id"],"properties":{
-         "workspace":ws,"id":{"type":"string","description":"Вида proj-xxxxxxxxxx. Регистр не важен."}}}},
-      {"name":"ntk_next",
-       "annotations":{"title":"Взять свободный тикет","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},
-       "description":"Взять следующий свободный тикет в работу. Захват атомарный: один тикет не достанется двоим.",
-       "inputSchema":{"type":"object","required":["workspace"],"properties":{
-         "workspace":ws,
-         "prefer":{"type":"string","description":"Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр: если по ним ничего нет, будет взят любой подходящий. Пожелание идёт НИЖЕ блокеров: сначала срочность (своя или унаследованная), затем «снимает блокер с начатого», и только потом эти теги."},
-         "tag":{"type":"string","description":"Отбор по тегам через запятую. В отличие от prefer ИСКЛЮЧАЕТ: не подошло — не выдаётся вовсе."},
-         "strict":{"type":"boolean","description":"Тег должен совпасть целиком, а не войти частью."},
-         "project":{"type":"string"},
-         "module":{"type":"string","description":"Отбор по конкретному модулю."},
-         "has_module":{"type":"boolean","description":"Любой ДЕЙСТВУЮЩИЙ модуль вместо конкретного имени: «единица работы назначена». Архивный не считается."},
-         "assignee":{"type":"string"},
-         "dry_run":{"type":"boolean","description":"Показать, что БЫ взялось, и НЕ забирать. Отбор и порядок те же. Ответ — совет, а не бронь: к моменту захвата тикет может уйти другому."}}}},
-      {"name":"ntk_start",
-       "annotations":{"title":"Взять тикет в работу","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},
-       "description":"Взять КОНКРЕТНЫЙ тикет в работу. Если его уже взяли, вернётся отказ с текущим статусом, а не тишина.",
-       "inputSchema":{"type":"object","required":["workspace","id"],"properties":{"workspace":ws,"id":{"type":"string"}}}},
-      {"name":"ntk_create",
-       "annotations":{"title":"Завести тикет","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},
-       "description":"Завести тикет.",
-       "inputSchema":{"type":"object","required":["workspace","project","title"],"properties":{
-         "workspace":ws,
-         "project":{"type":"string","description":"Проект — префикс идентификатора тикета."},
-         "title":{"type":"string"},"body":{"type":"string","description":"Тело в markdown."},
-         "assignee":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},
-         "module":{"type":"string","description":"Модуль — единица работы внутри проекта. Допустимые перечисляет ntk_meta; угадывать не нужно."},
-         "priority":{"type":"string"},"status":{"type":"string"},
-         "type":{"type":"string"},
-         "deps":{"type":"array","items":{"type":"string"},"description":"Идентификаторы тикетов, которых этот ждёт."}}}},
-      {"name":"ntk_update",
-       "annotations":{"title":"Изменить тикет","readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false},
-       "description":"Изменить тикет ОДНИМ вызовом: статус, заголовок, тело, исполнитель и теги сразу. Меняется одной транзакцией. Тикет вне группы todo уже кем-то подобран и требует force.",
-       "inputSchema":{"type":"object","required":["workspace","id"],"properties":{
-         "workspace":ws,"id":{"type":"string"},"status":{"type":"string"},"title":{"type":"string"},
-         "body":{"type":"string","description":"Тело целиком. ЗАМЕНЯЕТ прежнее."},
-         "body_append":{"type":"string","description":"Дописать в конец тела, не трогая написанное. Вместе с body не принимается."},
-         "assignee":{"type":"string"},
-         "tag_edits":{"type":"array","items":{"type":"string"},"description":"Каждая правка со знаком: [\"+alpha\",\"-legacy\"]. Знак обязателен."},
-         "module":{"type":"string","description":"Модуль. Пустая строка снимает его. При смене проекта модуль нового проекта обязателен."},
-         "project":{"type":"string"},"priority":{"type":"string"},"type":{"type":"string"},
-         "force":{"type":"boolean"}}}},
-      {"name":"ntk_close",
-       "annotations":{"title":"Закрыть тикет","readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false},
-       "description":"Закрыть тикет: перевести в done.",
-       "inputSchema":{"type":"object","required":["workspace","id"],"properties":{
-         "workspace":ws,"id":{"type":"string"},"force":{"type":"boolean"}}}},
-      {"name":"ntk_tag",
-       "annotations":{"title":"Поправить теги","readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false},
-       "description":"Поправить теги тикета. Каждая правка со знаком: [\"+alpha\",\"-legacy\"].",
-       "inputSchema":{"type":"object","required":["workspace","id","edits"],"properties":{
-         "workspace":ws,"id":{"type":"string"},
-         "edits":{"type":"array","items":{"type":"string"}},"force":{"type":"boolean"}}}},
-      {"name":"ntk_deps",
-       "annotations":{"title":"Зависимости","readOnlyHint":true,"openWorldHint":false},
-       "description":"Зависимости тикета: на чём стоит и что стоит на нём.",
-       "inputSchema":{"type":"object","required":["workspace","id"],"properties":{"workspace":ws,"id":{"type":"string"}}}},
-      {"name":"ntk_rm",
-       "annotations":{"title":"Убрать тикет","readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false},
-       "description":"Убрать тикет: он перестаёт показываться, но не стирается.",
-       "inputSchema":{"type":"object","required":["workspace","id"],"properties":{"workspace":ws,"id":{"type":"string"}}}},
-      {"name":"ntk_meta",
-       "annotations":{"title":"Справочники воркспейса","readOnlyHint":true,"openWorldHint":false},
-       "description":"Что есть в воркспейсе: статусы, приоритеты, проекты, люди.",
-       "inputSchema":{"type":"object","required":["workspace"],"properties":{"workspace":ws}}}
-    ])
+    ntk_core::tools::manifest()
 }
 
 /// Отпечаток набора инструментов. Входит в идентификатор сессии.
@@ -239,7 +139,11 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             if args.get("all").and_then(|v| v.as_bool()).unwrap_or(false) { q.push("all=true".into()); }
             if let Some(v) = s(args, "tag") { q.push(format!("tag={}", urlencoding::encode(&v))); }
             if let Some(v) = s(args, "title") { q.push(format!("title={}", urlencoding::encode(&v))); }
-            for k in ["assignee", "project"] {
+            // module was missing here: the handler accepts it but the
+            // dispatcher never forwarded it — so filtering by module was
+            // SILENTLY ignored and everything came back. That is worse than a
+            // refusal: a refusal is visible.
+            for k in ["assignee", "project", "module"] {
                 if let Some(v) = s(args, k) { q.push(format!("{k}={}", urlencoding::encode(&v))); }
             }
             if args.get("strict").and_then(|v| v.as_bool()).unwrap_or(false) { q.push("strict=true".into()); }
@@ -284,7 +188,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             let mut q = vec![];
             if let Some(w) = &ws { q.push(format!("workspace={}", urlencoding::encode(w))); }
             if let Some(v) = s(args, "walk_id") { q.push(format!("walk_id={}", urlencoding::encode(&v))); }
-            for k in ["status", "tag", "title", "assignee", "project"] {
+            for k in ["status", "tag", "title", "assignee", "project", "module"] {
                 if let Some(v) = s(args, k) { q.push(format!("{k}={}", urlencoding::encode(&v))); }
             }
             for k in ["strict", "all", "reset"] {
@@ -330,10 +234,34 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                     // видимым наполовину изменённым. Реестр модулей существовал,
                     // а назвать модуль по MCP было нечем.
                     for k in ["status", "title", "body", "body_append", "assignee",
-                              "module", "project", "priority", "type"] {
+                              "module", "project", "priority", "type", "due"] {
                         if let Some(v) = s(args, k) { p[k] = json!(v); }
                     }
                     if let Some(t) = args.get("tag_edits") { p["tag_edits"] = t.clone(); }
+                    // Dependencies. The server handled them and the local
+                    // client offered them, but the HTTP list never mentioned
+                    // them — so through the web client there was NOTHING to fix
+                    // links with after creation, and it looked like "ntk cannot
+                    // do that".
+                    for k in ["dep_edits", "dep_set"] {
+                        if let Some(d) = args.get(k) { p[k] = d.clone(); }
+                    }
+                    if let Some(edits) = p.get("dep_edits").and_then(|v| v.as_array()) {
+                        for e in edits {
+                            let t = e.as_str().unwrap_or("");
+                            if !t.starts_with('+') && !t.starts_with('-') {
+                                return (false, format!("dependency \u{00ab}{t}\u{00bb} has no sign: use + (start waiting) or - (stop)"));
+                            }
+                        }
+                    }
+                    if p.get("dep_set").and_then(|v| v.as_array()).is_some_and(|set| {
+                        set.iter().any(|e| {
+                            let t = e.as_str().unwrap_or("");
+                            t.starts_with('+') || t.starts_with('-')
+                        })
+                    }) {
+                        return (false, "dep_set replaces the whole set — signs do not belong here; use dep_edits to edit".into());
+                    }
                 }
             }
             // Знак у каждой правки обязателен, и проверяем его ДО записи:
@@ -363,6 +291,84 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                 "ntk_deps" => body_text(write::deps(st, h, Path(id), Query(qq)).await).await,
                 "ntk_rm" => body_text(write::remove(st, h, Path(id), Query(qq)).await).await,
                 _ => body_text(write::meta(st, h, Query(qq)).await).await,
+            }
+        }
+
+        // Modules. Over HTTP these did not exist at all: the registry was
+        // there, the local client used it, and through the web client there was
+        // no way to name a module — with no way to understand why "the same
+        // thing" worked in one place and not in the other.
+        "ntk_modules" => {
+            let uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
+            let Ok(Query(qq)) = Query::try_from_uri(&uri.parse().unwrap()) else {
+                return (false, "no workspace given".into());
+            };
+            let (ok, text) = body_text(write::meta(st, h, Query(qq)).await).await;
+            if !ok {
+                return (ok, text);
+            }
+            let want = s(args, "project");
+            match serde_json::from_str::<Value>(&text) {
+                Ok(v) => {
+                    let rows: Vec<Value> = v
+                        .get("modules")
+                        .and_then(|m| m.as_array())
+                        .map(|all| {
+                            all.iter()
+                                .filter(|x| match want.as_deref() {
+                                    None => true,
+                                    Some(p) => x.get("project").and_then(|v| v.as_str()) == Some(p),
+                                })
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (true, Value::Array(rows).to_string())
+                }
+                Err(e) => (false, format!("the directory did not parse: {e}")),
+            }
+        }
+
+        "ntk_modules_add" | "ntk_modules_replace" => {
+            let Some(project) = s(args, "project") else {
+                return (false, "no project given".into());
+            };
+            let key = if name == "ntk_modules_add" { "add" } else { "modules" };
+            let Some(list) = args.get(key).and_then(|v| v.as_array()) else {
+                return (false, format!("no {key} given"));
+            };
+            if list.is_empty() {
+                // An empty list on replace would wipe the project's registry
+                // whole, and over MCP that costs exactly one missing argument.
+                // Hence a refusal.
+                return (
+                    false,
+                    if name == "ntk_modules_add" {
+                        "name at least one module".into()
+                    } else {
+                        "an empty list would wipe the project's whole registry: send at least one module"
+                            .to_string()
+                    },
+                );
+            }
+            let mut p = json!({ key: Value::Array(list.clone()) });
+            if let Some(w) = &ws {
+                p["workspace"] = json!(w);
+            }
+            if name == "ntk_modules_add" {
+                match serde_json::from_value(p) {
+                    Ok(parsed) => {
+                        body_text(write::add_modules(st, h, Path(project), Json(parsed)).await).await
+                    }
+                    Err(e) => (false, e.to_string()),
+                }
+            } else {
+                match serde_json::from_value(p) {
+                    Ok(parsed) => {
+                        body_text(write::set_modules(st, h, Path(project), Json(parsed)).await).await
+                    }
+                    Err(e) => (false, e.to_string()),
+                }
             }
         }
 
@@ -588,4 +594,45 @@ pub async fn endpoint_get(State(app): State<Arc<App>>, headers: HeaderMap) -> Re
         // новостей.
         .keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)))
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    /// Everything the list advertises must be callable here.
+    ///
+    /// The drift ran exactly this way, only in the other direction: three
+    /// module tools lived in the client and were absent here, so through the
+    /// web client there was no way to name a module. Now the list is shared,
+    /// which makes it possible to advertise a tool and forget it in the
+    /// dispatcher — and that is precisely what this checks.
+    ///
+    /// It checks the file's text rather than making a call: the dispatcher is a
+    /// `match` on a name inside an async function that carries the service
+    /// state, and standing it up in a test would cost a fake pool, a fake key
+    /// and fake headers. A cheap check that catches the real mistake beats an
+    /// expensive one that never gets written.
+    #[test]
+    fn every_listed_tool_has_a_branch_in_the_dispatcher() {
+        let src = include_str!("mcp_http.rs");
+        let body = src
+            .split_once("async fn call_tool(")
+            .expect("the dispatcher was renamed — fix this test")
+            .1;
+        for t in ntk_core::tools::ALL {
+            let arm = format!("\"{}\"", t.name);
+            assert!(
+                body.contains(&arm),
+                "{} is in the catalogue but has no branch in the dispatcher",
+                t.name
+            );
+        }
+    }
+
+    /// The list comes from the catalogue and from nowhere else.
+    #[test]
+    fn the_list_is_the_catalogue() {
+        assert_eq!(super::tools(), ntk_core::tools::manifest());
+        let n = super::tools().as_array().map(|a| a.len()).unwrap_or(0);
+        assert_eq!(n, ntk_core::tools::ALL.len());
+    }
 }
