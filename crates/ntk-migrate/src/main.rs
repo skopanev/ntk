@@ -36,6 +36,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("018_write_limits", include_str!("../../../sql/018_write_limits.sql")),
     ("019_vector_policy", include_str!("../../../sql/019_vector_policy.sql")),
     ("020_vector_debt", include_str!("../../../sql/020_vector_debt.sql")),
+    ("021_vector_enable_seeds", include_str!("../../../sql/021_vector_enable_seeds.sql")),
 ];
 
 #[tokio::main]
