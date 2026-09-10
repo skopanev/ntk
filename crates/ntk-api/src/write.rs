@@ -484,6 +484,39 @@ pub async fn patch(
         }
     }
 
+    // Пределы длины при правке. Прежняя длина нужна затем, чтобы уже записанное
+    // сверх предела не стало нередактируемым: старые тикеты никто не переписывает,
+    // и запрет их править заморозил бы их навсегда. Отказ приходит только когда
+    // значение превышает предел И РАСТЁТ — то есть «старых не трогаем, но и
+    // раздувать дальше не даём».
+    let prev: Option<(String, String)> = tx
+        .query_opt("select title, body from tickets where id = $1", &[&id])
+        .await
+        .ok()
+        .flatten()
+        .map(|r| (r.get(0), r.get(1)));
+
+    if let Some(t) = &p.title {
+        let was = prev.as_ref().map(|(ti, _)| ti.chars().count());
+        if let Some(m) = check_len(&tx, "title", t, was).await {
+            return oops(StatusCode::BAD_REQUEST, &m);
+        }
+    }
+    // Замена и дописывание считаются одинаково — по ИТОГОВОЙ длине. Иначе
+    // дописывание стало бы обходом предела: по строчке за раз до трёхсот тысяч.
+    let was_body = prev.as_ref().map(|(_, b)| b.chars().count());
+    if let Some(b) = &p.body {
+        if let Some(m) = check_len(&tx, "body", b, was_body).await {
+            return oops(StatusCode::BAD_REQUEST, &m);
+        }
+    }
+    if let Some(a) = &p.body_append {
+        let joined = format!("{}{}", prev.as_ref().map(|(_, b)| b.as_str()).unwrap_or(""), a);
+        if let Some(m) = check_len(&tx, "body", &joined, was_body).await {
+            return oops(StatusCode::BAD_REQUEST, &m);
+        }
+    }
+
     // Пустая строка в due означает «снять срок», а не «не трогать»: в старом
     // инструменте это была единственная возможность убрать дату.
     let clear_due = p.due.as_deref().is_some_and(|d| d.trim().is_empty());
@@ -607,6 +640,18 @@ pub async fn create(
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
+
+    // Пределы длины — на ЗАПИСИ, единым местом для всех клиентов: CLI, локальный
+    // MCP и удалённый ходят одной ручкой, и проверка в каждом из них разошлась
+    // бы, как уже расходились схемы.
+    if let Some(m) = check_len(&tx, "title", &p.title, None).await {
+        return oops(StatusCode::BAD_REQUEST, &m);
+    }
+    if let Some(b) = &p.body {
+        if let Some(m) = check_len(&tx, "body", b, None).await {
+            return oops(StatusCode::BAD_REQUEST, &m);
+        }
+    }
 
     let status = p.status.clone().unwrap_or_else(|| "open".into());
     if let Some(m) = p.module.as_deref() {
@@ -930,6 +975,16 @@ pub async fn meta(
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
     };
 
+    let limits = tx
+        .query("select field, max_len from write_limits order by field", &[])
+        .await
+        .map(|rows| {
+            rows.iter()
+                .map(|r| (r.get::<_, String>(0), r.get::<_, i32>(1)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
     let statuses = tx
         .query("select s.name, s.grp, p.requires_force from statuses s
                   join status_policy p on p.grp = s.grp order by s.sort", &[])
@@ -983,6 +1038,11 @@ pub async fn meta(
         "projects": projects,
         "modules": modules,
         "people": people,
+        // Пределы отдаются наружу, чтобы число было ОДНО. Клиенту нужно знать
+        // порог до отправки, иначе он или гоняет впустую большие тела, или
+        // держит свою копию числа — а копия разойдётся в первый же раз, когда
+        // владелец подвинет порог в таблице.
+        "limits": limits,
     }))
     .into_response()
 }
@@ -1752,4 +1812,62 @@ mod explain_tests {
     fn an_unknown_error_is_not_guessed() {
         assert!(explain_constraint("connection reset by peer").is_none());
     }
+}
+
+/// Пределы длины из таблицы `write_limits`.
+///
+/// Читаются на каждой записи, а не кешируются: таблица в две строки, запрос
+/// дешевле, чем несогласованность после того, как владелец подвинул порог.
+/// Порог для этого и лежит в данных — его будут двигать без выпуска.
+async fn write_limit(tx: &deadpool_postgres::Transaction<'_>, field: &str) -> Option<i32> {
+    tx.query_opt("select max_len from write_limits where field = $1", &[&field])
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.get(0))
+}
+
+/// Отказ по длине — с числами и с тем, что делать дальше.
+///
+/// Без «что делать» предел просто мешает: человек видит отказ и всё равно
+/// вынужден угадывать. Оба выхода настоящие — вложения у тикета есть, а
+/// разбиение на атомарные тикеты и есть цель предела.
+fn too_long(field: &str, got: usize, max: i32) -> String {
+    let what = match field {
+        "title" => "заголовок",
+        _ => "тело",
+    };
+    if field == "title" {
+        return format!(
+            "{what} длиннее предела: {got} символов при {max}. Заголовок — одна строка о том, ЧТО сделать; подробности идут в тело."
+        );
+    }
+    format!(
+        "{what} длиннее предела: {got} символов при {max}. Разбейте работу на отдельные тикеты \
+         или унесите объём во вложение (ntk create -i <файл> или ntk update -i <файл>). \
+         Предел стоит затем, чтобы тикет читался целиком и оставался одной единицей работы."
+    )
+}
+
+/// Проверяет длину значения по пределу из данных.
+///
+/// `previous` — длина того, что лежало в поле ДО правки. Уже записанное сверх
+/// предела не становится нередактируемым: старые тикеты никто не переписывает,
+/// и запретить их править значило бы заморозить их навсегда. Отказ приходит
+/// только когда значение ПРЕВЫШАЕТ предел И РАСТЁТ.
+async fn check_len(
+    tx: &deadpool_postgres::Transaction<'_>,
+    field: &str,
+    value: &str,
+    previous: Option<usize>,
+) -> Option<String> {
+    let max = write_limit(tx, field).await?;
+    let got = value.chars().count();
+    if got as i64 <= max as i64 {
+        return None;
+    }
+    if previous.is_some_and(|p| got <= p) {
+        return None;
+    }
+    Some(too_long(field, got, max))
 }

@@ -633,6 +633,51 @@ async fn serve_mcp() -> Result<()> {
 
 
 #[allow(clippy::too_many_arguments)]
+/// Проверяет длину ДО отправки, чтобы не гонять по сети то, что будет отвергнуто.
+///
+/// Порог НЕ ЗАШИТ здесь и не хранится копией: он спрашивается у сервиса
+/// (`meta.limits`), потому что живёт в таблице и его двигают без выпуска. Своя
+/// копия числа разошлась бы с настоящим порогом в первый же раз — сегодня мы
+/// уже дважды чинили последствия ровно такого расхождения.
+///
+/// Спрашиваем не всегда, а только когда тело действительно велико: лишний вызов
+/// стоит около 230 мс, и платить их на каждом коротком тикете незачем. Порог
+/// «когда спросить» намеренно грубый — он про экономию сети, а не про политику.
+const ASK_LIMITS_OVER: usize = 4096;
+
+async fn refuse_if_too_long(
+    c: &api::Client,
+    key: &str,
+    ws: &str,
+    title: Option<&str>,
+    body: Option<&str>,
+) -> Result<()> {
+    let biggest = body.map(|b| b.chars().count()).unwrap_or(0);
+    if biggest <= ASK_LIMITS_OVER {
+        return Ok(());
+    }
+    let m = c.meta(key, ws).await?;
+    let limit = |f: &str| -> Option<usize> {
+        m.get("limits")?.get(f)?.as_u64().map(|v| v as usize)
+    };
+    for (field, value, what) in [
+        ("title", title, "заголовок"),
+        ("body", body, "тело"),
+    ] {
+        let Some(v) = value else { continue };
+        let got = v.chars().count();
+        if let Some(max) = limit(field) {
+            if got > max {
+                anyhow::bail!(
+                    "{what} длиннее предела: {got} символов при {max}. Разбейте работу на \
+                     отдельные тикеты или унесите объём во вложение. Отправка не выполнена."
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn create(
     title: String,
     workspace: Option<String>,
@@ -662,10 +707,12 @@ async fn create(
             .unwrap_or_default()
     };
     let client = api::Client::new(&cfg.url);
+    refuse_if_too_long(&client, key, &ws, Some(&title), body.as_deref()).await?;
 
     // Идентификатор назначает сервер. Раньше его придумывал клиент, и знание о
     // форме идентификатора жило в каждом клиенте отдельно: MCP-инструмент это
     // поле просто не слал, и заведение тикета через MCP не работало вовсе.
+
     let payload = serde_json::json!({
         // Воркспейс идёт в теле: ручка создания читает его оттуда, и
         // расхождение стоило мне одного прогона стенда.
@@ -795,6 +842,11 @@ async fn update(
         }
     };
 
+    let client = api::Client::new(&cfg.url);
+    // При дописывании длину итога знает только сервис — здесь проверяем то, что
+    // отправляем, чтобы не гнать по сети заведомо отвергаемое.
+    refuse_if_too_long(&client, key, &ws, title.as_deref(), body.as_deref().or(append.as_deref())).await?;
+
     let payload = serde_json::json!({
         "workspace": ws, "force": force,
         "status": status, "title": title, "body": body, "assignee": assignee,
@@ -805,7 +857,6 @@ async fn update(
         "priority": priority, "type": kind, "project": project, "due": due,
         "module": module,
     });
-    let client = api::Client::new(&cfg.url);
     client.patch(key, &ws, &id, &payload).await?;
 
     // Успешный ответ — ещё не изменение. Сервер старее клиента молча

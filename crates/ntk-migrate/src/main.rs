@@ -33,6 +33,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("015_walk_state", include_str!("../../../sql/015_walk_state.sql")),
     ("016_modules", include_str!("../../../sql/016_modules.sql")),
     ("017_module_lifecycle", include_str!("../../../sql/017_module_lifecycle.sql")),
+    ("018_write_limits", include_str!("../../../sql/018_write_limits.sql")),
 ];
 
 #[tokio::main]
@@ -158,4 +159,47 @@ async fn apply_to_schema(client: &Client, schema: &str) -> Result<usize> {
         }
     }
     Ok(applied)
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::MIGRATIONS;
+
+    /// Файл в sql/ обязан быть В СПИСКЕ.
+    ///
+    /// Миграции вшиты include_str! по явному перечислению, и это правильно:
+    /// порядок применения — решение, а не результат сортировки каталога. Но у
+    /// такого способа есть тихий отказ: новый файл просто не применяется, а
+    /// раннер бодро сообщает «все схемы на последней миграции». Наступил на это
+    /// сам, добавив 018 и получив «нечего применять» при отсутствующей таблице.
+    #[test]
+    fn every_sql_file_is_registered() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sql");
+        let mut missing = Vec::new();
+        for e in std::fs::read_dir(&dir).expect("каталог sql/ не читается") {
+            let name = e.expect("запись каталога").file_name().to_string_lossy().to_string();
+            let Some(stem) = name.strip_suffix(".sql") else { continue };
+            if !MIGRATIONS.iter().any(|(id, _)| *id == stem) {
+                missing.push(stem.to_string());
+            }
+        }
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "эти файлы sql/ не зарегистрированы и НЕ ПРИМЕНЯТСЯ: {missing:?}"
+        );
+    }
+
+    /// И обратно: в списке нет того, чего нет на диске. Такое не собралось бы,
+    /// но проверка держит список и каталог в одном соответствии с двух сторон.
+    #[test]
+    fn the_registry_is_ordered_and_unique() {
+        let ids: Vec<&str> = MIGRATIONS.iter().map(|(id, _)| *id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "список миграций не по порядку: {ids:?}");
+        let mut uniq = sorted.clone();
+        uniq.dedup();
+        assert_eq!(sorted.len(), uniq.len(), "в списке миграций есть повтор");
+    }
 }
