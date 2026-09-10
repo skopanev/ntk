@@ -34,6 +34,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("016_modules", include_str!("../../../sql/016_modules.sql")),
     ("017_module_lifecycle", include_str!("../../../sql/017_module_lifecycle.sql")),
     ("018_write_limits", include_str!("../../../sql/018_write_limits.sql")),
+    ("019_vector_policy", include_str!("../../../sql/019_vector_policy.sql")),
 ];
 
 #[tokio::main]
