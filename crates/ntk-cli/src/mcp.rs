@@ -47,6 +47,7 @@ pub struct LsArgs {
     // Вернуть только ЧИСЛО подходящих, без самих тикетов. Потолок выдачи в
     // 500 счёту не мешает: считает база.
     pub count: Option<bool>,
+    pub stale: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -335,6 +336,7 @@ impl Ntk {
             module: a.module.clone(),
             strict: a.strict.unwrap_or(false),
             all: a.all.unwrap_or(false),
+            stale: a.stale,
         };
         if a.count.unwrap_or(false) {
             let n = c.count(&key, &a.workspace, &f).await.map_err(oops)?;
@@ -363,6 +365,8 @@ impl Ntk {
             module: a.module.clone(),
             strict: a.strict.unwrap_or(false),
             all: a.all.unwrap_or(false),
+            // Обход про проверку, а не про поиск брошенного: отбора нет.
+            stale: None,
         };
         let v = c
             .walk(&key, &a.workspace, &a.walk_id, &f, a.reset.unwrap_or(false))

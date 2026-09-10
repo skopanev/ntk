@@ -187,7 +187,7 @@ pub async fn step(
         "select id, uuid::text, title, status, priority, type, assignee,
                 project_id, module, tags, body,
                 created_at::text, updated_at::text,
-                started_at::text, closed_at::text
+                started_at::text, closed_at::text, current_status_at::text
            from tickets where deleted_at is null",
     );
     let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -240,6 +240,7 @@ pub async fn step(
         updated_at: r.get(12),
         started_at: r.get(13),
         closed_at: r.get(14),
+        current_status_at: r.get(15),
     };
 
     // The mark is set by check-and-write: the `not (… = any(seen))` condition

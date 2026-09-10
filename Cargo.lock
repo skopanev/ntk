@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "ntk-api"
-version = "0.5.46"
+version = "0.5.47"
 dependencies = [
  "anyhow",
  "axum",
@@ -1143,11 +1143,12 @@ dependencies = [
 
 [[package]]
 name = "ntk-cli"
-version = "0.5.46"
+version = "0.5.47"
 dependencies = [
  "anyhow",
  "clap",
  "hex",
+ "jiff",
  "ntk-core",
  "reqwest",
  "rmcp",
@@ -1160,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "ntk-core"
-version = "0.5.46"
+version = "0.5.47"
 dependencies = [
  "serde",
  "serde_json",
@@ -1168,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "ntk-migrate"
-version = "0.5.46"
+version = "0.5.47"
 dependencies = [
  "anyhow",
  "tokio",

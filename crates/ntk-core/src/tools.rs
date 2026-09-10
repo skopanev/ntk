@@ -254,6 +254,7 @@ pub const ALL: &[Tool] = &[
             ASSIGNEE_PICK,
             PROJECT_PICK,
             MODULE_PICK,
+            Field::opt("stale", Ty::Int, "Only tickets that have been sitting in their CURRENT status longer than this many days. Answers the one question nothing could answer before: which work was abandoned — a container died, an agent never came back, and the ticket stayed in in_progress. Counted from the moment of the last status change, not from the last edit: fixing a typo yesterday must not make a ticket look freshly taken."),
             Field::opt("count", Ty::Bool, "Return only the NUMBER of matches. The 500-row output cap does not limit the count: the database counts it."),
         ],
     },

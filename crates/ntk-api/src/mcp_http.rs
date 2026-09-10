@@ -136,6 +136,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             if let Some(v) = s(args, "status") { q.push(format!("status={}", urlencoding::encode(&v))); }
             if let Some(v) = args.get("limit").and_then(|v| v.as_i64()) { q.push(format!("limit={v}")); }
             if let Some(v) = args.get("offset").and_then(|v| v.as_i64()) { q.push(format!("offset={v}")); }
+            if let Some(v) = args.get("stale").and_then(|v| v.as_i64()) { q.push(format!("stale={v}")); }
             if args.get("all").and_then(|v| v.as_bool()).unwrap_or(false) { q.push("all=true".into()); }
             if let Some(v) = s(args, "tag") { q.push(format!("tag={}", urlencoding::encode(&v))); }
             if let Some(v) = s(args, "title") { q.push(format!("title={}", urlencoding::encode(&v))); }

@@ -39,6 +39,8 @@ enum Cmd {
         module: Option<String>,
         #[arg(short = 'q', long, help = ntk_core::tools::arg("ntk_ls", "title"))]
         title: Option<String>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_ls", "stale"))]
+        stale: Option<i64>,
         #[arg(long, help = ntk_core::tools::arg("ntk_ls", "count"))]
         count: bool,
         #[arg(short = 'n', long, default_value_t = 50, help = ntk_core::tools::arg("ntk_ls", "limit"))]
@@ -263,12 +265,12 @@ async fn main() -> Result<()> {
     let ws = cli.workspace.clone();
     match cli.cmd {
         Cmd::Login => login().await,
-        Cmd::Ls { status, tag, strict, title, assignee, project, module, count, limit, offset, all, json } => {
-            let f = api::Filters { status, tag, title, assignee, project, module, strict, all };
+        Cmd::Ls { status, tag, strict, title, assignee, project, module, stale, count, limit, offset, all, json } => {
+            let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale };
             ls(ws, f, count, limit, offset, json).await
         }
         Cmd::Walk { status, tag, strict, title, assignee, project, module, all, reset, json } => {
-            let f = api::Filters { status, tag, title, assignee, project, module, strict, all };
+            let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale: None };
             walk(ws, f, reset, json).await
         }
         Cmd::Projects { archive, unarchive, move_from, to, json } =>
@@ -359,9 +361,10 @@ async fn ls(
     for t in &tickets {
         // Ширины подобраны под id вида proj-xxxxxxxxxx и наши статусы.
         println!(
-            "{:<16} {:<12} {:<10} {}",
+            "{:<16} {:<12} {:<6} {:<10} {}",
             t.id,
             t.status,
+            days_in_status(t.current_status_at.as_deref()),
             t.assignee.as_deref().unwrap_or("—"),
             t.title
         );
@@ -1089,6 +1092,41 @@ async fn similar(
     Ok(())
 }
 
+/// Сколько тикет стоит в текущем статусе, коротко: `3д`, `2ч`, `—`.
+///
+/// Показывается в списке, потому что «сколько висит» — первое, что спрашивают о
+/// чужой работе, и до сих пор ответить на это было нечем: поле база заполняла,
+/// а наружу его не отдавали. Сутки и часы, без минут: точность здесь ничего не
+/// добавляет, а колонку раздувает.
+fn days_in_status(since: Option<&str>) -> String {
+    let Some(raw) = since else { return "—".into() };
+    let Ok(t) = raw.parse::<jiff::Timestamp>() else {
+        // Postgres отдаёт `2026-09-10 12:18:15+00`, а не RFC 3339: пробел
+        // вместо T и смещение без двоеточия. Чиним, а не молчим — иначе
+        // колонка пустела бы у всех сразу и выглядела как «поля нет».
+        let fixed = raw.replacen(' ', "T", 1);
+        let fixed = if fixed.ends_with("+00") { format!("{}:00", fixed) } else { fixed };
+        return match fixed.parse::<jiff::Timestamp>() {
+            Ok(t) => span_short(t),
+            Err(_) => "—".into(),
+        };
+    };
+    span_short(t)
+}
+
+fn span_short(t: jiff::Timestamp) -> String {
+    let secs = (jiff::Timestamp::now() - t).get_seconds();
+    if secs < 0 {
+        return "—".into();
+    }
+    let days = secs / 86_400;
+    if days > 0 {
+        format!("{days}д")
+    } else {
+        format!("{}ч", secs / 3_600)
+    }
+}
+
 async fn meta(workspace: Option<String>, json: bool) -> Result<()> {
     let cfg = config::load()?;
     let key = config::require_key(&cfg)?;
@@ -1319,6 +1357,7 @@ mod describe_tests {
             module: m.map(str::to_string),
             strict: false,
             all: true,
+            stale: None,
         }
     }
 

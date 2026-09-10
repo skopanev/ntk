@@ -97,6 +97,17 @@ pub struct Ticket {
     /// том, когда работа закончилась: время создания и правки на этот вопрос
     /// не отвечают.
     pub closed_at: Option<String>,
+    /// С какого момента тикет стоит в ТЕКУЩЕМ статусе.
+    ///
+    /// База заполняла его с самого начала, а наружу он не отдавался ни разу —
+    /// и это оставляло без ответа единственный вопрос, который задают о
+    /// брошенной работе: сколько она уже висит. `updated_at` на него не
+    /// отвечает (его двигает любая правка тела или тега), `started_at` — тем
+    /// более: он про первый переход в работу, а не про нынешний статус.
+    ///
+    /// Истории переходов это не заменяет: «сколько провисел в to_review» по
+    /// одному полю не узнать, только «сколько висит в том, где стоит сейчас».
+    pub current_status_at: Option<String>,
 }
 
 /// Разбор идентификатора так, как его набирают люди: `proj-1a2b3c4d5e`
@@ -147,13 +158,13 @@ mod tests {
             priority: None, kind: None, assignee: None, project: None, module: None,
             tags: vec![], deps: vec![], due: None, body: None,
             created_at: "now".into(), updated_at: "now".into(),
-            started_at: None, closed_at: None,
+            started_at: None, closed_at: None, current_status_at: None,
         };
         let json = serde_json::to_string(&t).unwrap();
         for field in [
             "id", "uuid", "title", "status", "priority", "type", "assignee",
             "project", "module", "tags", "deps", "due", "body", "created_at", "updated_at",
-            "started_at", "closed_at",
+            "started_at", "closed_at", "current_status_at",
         ] {
             assert!(
                 json.contains(&format!("\"{field}\"")),

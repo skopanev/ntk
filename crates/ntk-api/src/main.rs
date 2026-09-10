@@ -252,6 +252,16 @@ struct TicketsQuery {
     /// мегабайтов, а не ответ на вопрос «сколько всего».
     #[serde(default)]
     count: bool,
+    /// Только те, что стоят в текущем статусе дольше N дней.
+    ///
+    /// Отвечает на вопрос, на который до сих пор ответить было нечем: какая
+    /// работа брошена. Контейнер упал, агент не вернулся — тикет остался в
+    /// in_progress, и увидеть это можно было только запросом в базу руками.
+    ///
+    /// Считается по `current_status_at`, а не по `updated_at`: последний
+    /// двигает любая правка тела или тега, и тикет, которому вчера поправили
+    /// опечатку, выглядел бы свежевзятым.
+    stale: Option<i64>,
 }
 
 fn default_limit() -> i64 {
@@ -310,7 +320,7 @@ pub(crate) async fn ticket_one(
             "select id, uuid::text, title, status, priority, type, assignee,
                     project_id, module, tags, body, due::text,
                     created_at::text, updated_at::text,
-                    started_at::text, closed_at::text
+                    started_at::text, closed_at::text, current_status_at::text
                from tickets where lower(id) = lower($1) and deleted_at is null",
             &[&id],
         )
@@ -356,6 +366,7 @@ pub(crate) async fn ticket_one(
         updated_at: r.get(13),
         started_at: r.get(14),
         closed_at: r.get(15),
+        current_status_at: r.get(16),
     };
     (StatusCode::OK, Json(serde_json::json!({ "ticket": ticket }))).into_response()
 }
@@ -559,7 +570,7 @@ pub(crate) async fn tickets(
         "select id, uuid::text, title, status, priority, type, assignee,
                 project_id, module, tags, body,
                 created_at::text, updated_at::text,
-                started_at::text, closed_at::text"
+                started_at::text, closed_at::text, current_status_at::text"
     };
     let mut sql = format!("{head} from tickets where deleted_at is null");
     let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -607,6 +618,22 @@ pub(crate) async fn tickets(
         args.push(&title);
         sql.push_str(&format!(" and title ilike '%' || ${} || '%'", args.len()));
     }
+    // Дни считаются в базе, а не подставляются интервалом из строки: интервал,
+    // собранный форматированием, — это чужой текст внутри SQL.
+    //
+    // Тип ровно i32: `make_interval(days => …)` принимает int4, а связанный
+    // i64 уходит как int8 и валится «error serializing parameter» — отказом,
+    // в котором про типы не сказано ни слова. Потолок в сто лет — чтобы
+    // приведение не могло обрезать значение молча.
+    let stale: Option<i32> = q.stale.filter(|d| *d > 0).map(|d| d.min(36_500) as i32);
+    if stale.is_some() {
+        args.push(&stale);
+        sql.push_str(&format!(
+            " and current_status_at is not null \
+              and current_status_at < now() - make_interval(days => ${})",
+            args.len()
+        ));
+    }
 
     // Счёт не листается: ни порядка, ни страницы ему не нужно.
     if q.count {
@@ -648,6 +675,7 @@ pub(crate) async fn tickets(
                     updated_at: r.get(12),
                     started_at: r.get(13),
                     closed_at: r.get(14),
+                    current_status_at: r.get(15),
                 })
                 .collect::<Vec<_>>()
         });

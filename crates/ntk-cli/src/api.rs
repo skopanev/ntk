@@ -16,6 +16,8 @@ pub struct Filters {
     pub strict: bool,
     /// Тикеты всех, а не только свои. Проигрывает явно названному исполнителю.
     pub all: bool,
+    /// Только те, что стоят в текущем статусе дольше N дней.
+    pub stale: Option<i64>,
 }
 
 pub struct Client {
@@ -64,6 +66,7 @@ fn filter_query(f: &Filters) -> Vec<(&'static str, String)> {
     if let Some(v) = f.module.as_deref() { q.push(("module", v.to_string())); }
     if f.strict { q.push(("strict", "true".to_string())); }
     if f.all { q.push(("all", "true".to_string())); }
+    if let Some(d) = f.stale { q.push(("stale", d.to_string())); }
     q
 }
 
@@ -626,6 +629,7 @@ mod filter_query_tests {
             module: Some("server/db".into()),
             strict: true,
             all: true,
+            stale: Some(7),
         }
     }
 
@@ -636,7 +640,7 @@ mod filter_query_tests {
     #[test]
     fn every_filter_reaches_the_query() {
         let q = filter_query(&full());
-        for want in ["status", "tag", "title", "assignee", "project", "module", "strict", "all"] {
+        for want in ["status", "tag", "title", "assignee", "project", "module", "strict", "all", "stale"] {
             assert!(q.iter().any(|(k, _)| *k == want), "потерян отбор {want}: {q:?}");
         }
     }
@@ -652,7 +656,7 @@ mod filter_query_tests {
     fn empty_filters_add_nothing() {
         let q = filter_query(&Filters {
             status: None, tag: None, title: None, assignee: None,
-            project: None, module: None, strict: false, all: false,
+            project: None, module: None, strict: false, all: false, stale: None,
         });
         assert!(q.is_empty(), "пустой отбор не должен ничего добавлять: {q:?}");
     }
