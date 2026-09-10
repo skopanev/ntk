@@ -564,11 +564,118 @@ async fn next(
     }
 }
 
-/// Отдаёт инструменты по stdio. Ничего не печатает в stdout, кроме протокола:
-/// любая посторонняя строка там ломает разбор на стороне клиента.
+/// Serves the tools over stdio. Nothing but protocol goes to stdout: one stray
+/// line there breaks parsing on the client side.
+///
+/// The stream is filtered before rmcp sees it, and that is not decoration.
+///
+/// Newer clients OPEN with a probe of their own rather than with `initialize`:
+/// Gemini (antigravity-client) sends `server/discover` carrying protocol
+/// version 2026-07-28, with the client info moved into `_meta`. rmcp knows only
+/// the older handshake — it waits for `initialize`, sees something else and
+/// CLOSES THE CONNECTION. The client then has nothing to fall back to, and the
+/// server shows up as broken: "connection closed: initialized request".
+///
+/// The two servers that do work in that client answer such a probe with a plain
+/// `-32601 method not found` and STAY ALIVE — after which the client falls back
+/// to `initialize` and everything proceeds. That is the whole difference, and
+/// that is what is reproduced here: before `initialize`, an unknown request is
+/// answered with -32601 and never forwarded; an unknown notification is
+/// dropped. After `initialize` the stream passes through untouched.
+///
+/// Written as a filter rather than as support for the new protocol on purpose:
+/// answering a probe we do not implement would be a lie, while refusing it
+/// honestly is what the specification is for.
 async fn serve_mcp() -> Result<()> {
-    use rmcp::{transport::stdio, ServiceExt};
-    let service = mcp::Ntk::new().serve(stdio()).await?;
+    use rmcp::ServiceExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // The filter writes here, rmcp reads the other end.
+    let (mut to_server, server_in) = tokio::io::duplex(64 * 1024);
+    // rmcp writes here, the pump copies the other end to the real stdout.
+    let (server_out, from_server) = tokio::io::duplex(64 * 1024);
+
+    // One writer owns stdout. Two producers write to it — rmcp's answers and
+    // our own refusals — and interleaved halves of two JSON lines would be
+    // unparseable garbage.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        let mut out = tokio::io::stdout();
+        while let Some(s) = rx.recv().await {
+            if out.write_all(s.as_bytes()).await.is_err() {
+                break;
+            }
+            let _ = out.flush().await;
+        }
+    });
+
+    let pump = tx.clone();
+    tokio::spawn(async move {
+        let mut r = BufReader::new(from_server);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match r.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if pump.send(line.clone()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let refuse = tx;
+    tokio::spawn(async move {
+        let mut r = BufReader::new(tokio::io::stdin());
+        let mut line = String::new();
+        let mut handshaken = false;
+        loop {
+            line.clear();
+            match r.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            if !handshaken {
+                let parsed: Option<serde_json::Value> = serde_json::from_str(&line).ok();
+                let method = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("method"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or_default();
+                if method == "initialize" {
+                    handshaken = true;
+                } else {
+                    // A request gets an honest refusal; a notification is
+                    // dropped, because answering one is itself a protocol error.
+                    if let Some(id) = parsed.as_ref().and_then(|v| v.get("id")).cloned() {
+                        let err = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32601,
+                                "message": format!("unknown method {method}")
+                            }
+                        });
+                        if refuse.send(format!("{err}\n")).is_err() {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+            if to_server.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+        // stdin ended: closing our side lets rmcp finish rather than hang.
+        drop(to_server);
+    });
+
+    let service = mcp::Ntk::new().serve((server_in, server_out)).await?;
     service.waiting().await?;
     Ok(())
 }
