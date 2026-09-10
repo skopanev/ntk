@@ -17,6 +17,7 @@ mod mcp_http;
 mod mcp_oauth;
 mod release;
 mod spaces;
+mod vector;
 mod walk;
 mod write;
 
@@ -36,6 +37,12 @@ use serde_json::json;
 pub struct App {
     pub pool: deadpool_postgres::Pool,
     pub cfg: config::Config,
+    /// Векторизация. None означает «ключа нет» — и тогда её нет вовсе, а не
+    /// «есть, но молча ничего не делает».
+    pub vector: Option<std::sync::Arc<vector::Vector>>,
+    /// Слив идёт. Один на процесс: вторая задача не ускорила бы — потолок
+    /// обращений всё равно общий, — а только запутала бы учёт.
+    pub draining: std::sync::atomic::AtomicBool,
 }
 
 #[tokio::main]
@@ -64,7 +71,22 @@ async fn main() -> anyhow::Result<()> {
         "подключение к базе установлено"
     );
 
-    let app = Arc::new(App { pool, cfg });
+    let v = vector::Vector::from_env().map(std::sync::Arc::new);
+    match &v {
+        Some(_) => tracing::info!("векторизация: ключ найден"),
+        // Говорим вслух: молчание тут читалось бы как «работает».
+        None => tracing::info!("векторизация: ключа нет, индексация не работает"),
+    }
+    let app = Arc::new(App {
+        pool,
+        cfg,
+        vector: v,
+        draining: std::sync::atomic::AtomicBool::new(false),
+    });
+
+    // Долг, оставшийся с прошлого запуска, разбирается на старте: процесс мог
+    // умереть посреди слива, и без этого долг лежал бы до следующей записи.
+    vector::wake(&app);
     let router = Router::new()
         .route("/health", get(health))
         // Без ключа намеренно: клиент, который ещё не вошёл, тоже должен

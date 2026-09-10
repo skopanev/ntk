@@ -621,6 +621,7 @@ pub async fn patch(
     match r {
         Ok(_) if tx.commit().await.is_ok() => {
             tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, forced = p.force, "тикет изменён");
+            crate::vector::wake(&app);
             Json(json!({"id": id, "updated": true})).into_response()
         }
         // Нарушенное ограничение — ошибка ВЫЗЫВАЮЩЕГО, а не сбой сервиса.
@@ -858,6 +859,8 @@ pub async fn create(
         return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
     }
     tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, "тикет создан");
+    // Будим слив ПОСЛЕ коммита: до него долга ещё нет, и будить нечего.
+    crate::vector::wake(&app);
     (StatusCode::CREATED, Json(json!({"id": id, "status": status}))).into_response()
 }
 
@@ -1004,6 +1007,7 @@ pub async fn remove(
         Ok(0) => oops(StatusCode::NOT_FOUND, "такого тикета нет или он уже удалён"),
         Ok(_) if tx.commit().await.is_ok() => {
             tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, "тикет удалён");
+            crate::vector::wake(&app);
             Json(json!({"id": id, "deleted": true, "still_waiting_on_it": waiting})).into_response()
         }
         _ => oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка"),
