@@ -610,6 +610,14 @@ pub async fn patch(
               &clear_module, &module_value],
         )
         .await;
+    // Долг — до commit и в той же транзакции. Правка, не изменившая
+    // отправляемый текст (приоритет, исполнитель, срок), долга не создаёт.
+    if r.is_ok() {
+        if let Err(e) = enqueue_upsert(&tx, &id).await {
+            tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        }
+    }
     match r {
         Ok(_) if tx.commit().await.is_ok() => {
             tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, forced = p.force, "тикет изменён");
@@ -840,6 +848,12 @@ pub async fn create(
             .into_response();
     }
 
+    // Долг ставится ДО commit, в той же транзакции: если процесс умрёт между
+    // ними, тикет не окажется записанным без долга.
+    if let Err(e) = enqueue_upsert(&tx, &id).await {
+        tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+    }
     if tx.commit().await.is_err() {
         return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
     }
@@ -978,6 +992,14 @@ pub async fn remove(
             &[&id],
         )
         .await;
+    // Удаление точки из индекса — тоже долг, и тоже в этой транзакции.
+    // `done` сюда не попадает: закрытый тикет остаётся живым и должен находиться.
+    if matches!(affected, Ok(n) if n > 0) {
+        if let Err(e) = enqueue_delete(&tx, &id).await {
+            tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг удаления не поставлен");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "внутренняя ошибка");
+        }
+    }
     match affected {
         Ok(0) => oops(StatusCode::NOT_FOUND, "такого тикета нет или он уже удалён"),
         Ok(_) if tx.commit().await.is_ok() => {
@@ -1942,3 +1964,172 @@ async fn check_len(
     Some(too_long(field, got, max))
 }
 
+
+// ── Векторизация: вход и книга долга ─────────────────────────────────────────
+
+/// Предел входа embedding — 2000 Unicode scalar values.
+///
+/// Число совпадает с пределом записи тела, но это ДРУГАЯ ручка: запись
+/// ограничена по полям (тело 2000, заголовок 256), а вход — по склейке
+/// title+'\n'+body. Законный тикет даёт до 2257, поэтому вход усекается
+/// отдельно. Хранимое в SQL не трогается ничем.
+pub(crate) const EMBED_INPUT_MAX: usize = 2000;
+
+/// Текст, который уйдёт в модель: заголовок ПЕРВЫМ, затем перевод строки и тело.
+///
+/// Порядок не косметика: при усечении выживает начало, а начало — это то, ЧТО
+/// делать. Тело без заголовка опознать труднее, чем заголовок без тела.
+/// Считаем в Unicode scalar values, а не в байтах: кириллица иначе усохла бы
+/// вдвое против латиницы на одном и том же пределе.
+pub(crate) fn embed_input(title: &str, body: &str) -> String {
+    let joined = format!("{title}\n{body}");
+    if joined.chars().count() <= EMBED_INPUT_MAX {
+        return joined;
+    }
+    joined.chars().take(EMBED_INPUT_MAX).collect()
+}
+
+/// Отпечаток отправляемого входа.
+///
+/// Считается по ТЕКСТУ ПОСЛЕ усечения: две правки, различающиеся только за
+/// пределом обрезки, дают один вход и не обязаны стоить второго обращения к
+/// модели.
+pub(crate) fn embed_sha(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(input.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+/// Ставит долг индексации В ТОЙ ЖЕ транзакции, что и правка тикета.
+///
+/// Ничего не делает при выключенной политике: выключено — значит ноль записей,
+/// ноль обращений, никаких фоновых работ.
+///
+/// Долг НЕ ставится, если отправляемый вход не изменился: смена приоритета,
+/// исполнителя или срока не меняет title+body, а значит не стоит embedding.
+/// Это и есть «неизменный отпечаток — ноль обращений к модели», и проверяется
+/// оно здесь, до всякой сети.
+pub(crate) async fn enqueue_upsert(
+    tx: &deadpool_postgres::Transaction<'_>,
+    id: &str,
+) -> anyhow::Result<bool> {
+    if !vector_enabled(tx).await {
+        return Ok(false);
+    }
+    let Some(row) = tx
+        .query_opt(
+            "select title, body from tickets where id = $1 and deleted_at is null",
+            &[&id],
+        )
+        .await?
+    else {
+        return Ok(false);
+    };
+    let sha = embed_sha(&embed_input(&row.get::<_, String>(0), &row.get::<_, String>(1)));
+
+    // Уже в индексе с тем же отпечатком и без висящего долга — делать нечего.
+    let indexed: Option<String> = tx
+        .query_opt("select indexed_sha from vector_index_state where ticket_id = $1", &[&id])
+        .await?
+        .map(|r| r.get(0));
+    let pending: bool = tx
+        .query_opt("select 1 from vector_debt where ticket_id = $1", &[&id])
+        .await?
+        .is_some();
+    if indexed.as_deref() == Some(sha.as_str()) && !pending {
+        return Ok(false);
+    }
+
+    tx.execute(
+        "insert into vector_debt (ticket_id, op, input_sha, attempts, last_error, queued_at)
+         values ($1, 'upsert', $2, 0, null, now())
+         on conflict (ticket_id) do update
+            set op = 'upsert', input_sha = excluded.input_sha,
+                attempts = 0, last_error = null, queued_at = now()",
+        &[&id, &sha],
+    )
+    .await?;
+    Ok(true)
+}
+
+/// Долг на удаление точки из индекса.
+///
+/// `done` сюда НЕ попадает: закрытый тикет остаётся живым и должен находиться.
+/// Удаление — это deleted_at, и только оно.
+pub(crate) async fn enqueue_delete(
+    tx: &deadpool_postgres::Transaction<'_>,
+    id: &str,
+) -> anyhow::Result<bool> {
+    if !vector_enabled(tx).await {
+        return Ok(false);
+    }
+    tx.execute(
+        "insert into vector_debt (ticket_id, op, input_sha, attempts, last_error, queued_at)
+         values ($1, 'delete', null, 0, null, now())
+         on conflict (ticket_id) do update
+            set op = 'delete', input_sha = null,
+                attempts = 0, last_error = null, queued_at = now()",
+        &[&id],
+    )
+    .await?;
+    Ok(true)
+}
+
+pub(crate) async fn vector_enabled(tx: &deadpool_postgres::Transaction<'_>) -> bool {
+    tx.query_opt("select enabled from vector_policy where only_row", &[])
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.get(0))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod embed_input_tests {
+    use super::{embed_input, embed_sha, EMBED_INPUT_MAX};
+
+    // Заголовок идёт ПЕРВЫМ и переживает усечение: при обрезке выживает начало,
+    // а начало — это то, ЧТО делать.
+    #[test]
+    fn the_title_comes_first_and_survives_clipping() {
+        let body = "тело ".repeat(5000);
+        let got = embed_input("Починить выгрузку", &body);
+        assert!(got.starts_with("Починить выгрузку\n"), "заголовок не первым: {}", &got[..40]);
+        assert_eq!(got.chars().count(), EMBED_INPUT_MAX);
+    }
+
+    // Считаем в Unicode scalar values, а не в байтах: иначе кириллица усохла бы
+    // вдвое против латиницы на одном и том же пределе.
+    #[test]
+    fn the_limit_counts_characters_not_bytes() {
+        let cyrillic = "я".repeat(EMBED_INPUT_MAX * 2);
+        let got = embed_input("", &cyrillic);
+        assert_eq!(got.chars().count(), EMBED_INPUT_MAX);
+        assert!(got.len() > EMBED_INPUT_MAX, "в байтах должно быть больше");
+    }
+
+    // Граница 2000/2001: ровно на пределе не режем.
+    #[test]
+    fn exactly_at_the_limit_is_kept_whole() {
+        let body = "x".repeat(EMBED_INPUT_MAX - 2); // + заголовок "t" + '\n'
+        let got = embed_input("t", &body);
+        assert_eq!(got.chars().count(), EMBED_INPUT_MAX);
+        assert!(got.ends_with('x'));
+    }
+
+    // Отпечаток считается ПОСЛЕ усечения: две правки, различающиеся только за
+    // пределом обрезки, дают один вход и не обязаны стоить второго embedding.
+    #[test]
+    fn changes_beyond_the_clip_do_not_change_the_sha() {
+        let a = embed_input("t", &"x".repeat(9000));
+        let b = embed_input("t", &format!("{}РАЗНОЕ", "x".repeat(9000)));
+        assert_eq!(embed_sha(&a), embed_sha(&b));
+    }
+
+    // А изменение внутри предела — меняет.
+    #[test]
+    fn a_change_inside_the_clip_changes_the_sha() {
+        assert_ne!(embed_sha(&embed_input("t", "один")), embed_sha(&embed_input("t", "два")));
+    }
+}
