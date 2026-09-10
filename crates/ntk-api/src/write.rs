@@ -310,7 +310,45 @@ pub async fn patch(
     };
     let current: String = row.get(0);
 
-    if !p.force {
+    // Закрытие не требует force, и это не послабление гарда, а его смысл.
+    //
+    // Гард стоит затем, чтобы не править ЧУЖУЮ работу в полёте. Но довести
+    // начатое до конца — не правка, а завершение: обычный путь работы, который
+    // проходит каждый тикет. Требовать здесь force значило заставлять ставить
+    // его рутинно, а от рутины флаг «сделать всё равно» перестаёт что-либо
+    // значить — ровно то, от чего мы страхуемся везде.
+    //
+    // Исключение УЗКОЕ: только когда меняется единственное поле — статус, и
+    // только когда целевой статус в терминальной группе. Закрыть, попутно
+    // переписав чужое тело или сняв исполнителя, по-прежнему нельзя без force.
+    let only_status = p.status.is_some()
+        && p.title.is_none()
+        && p.body.is_none()
+        && p.body_append.is_none()
+        && p.assignee.is_none()
+        && p.tag_edits.is_none()
+        && p.dep_edits.is_none()
+        && p.dep_set.is_none()
+        && p.priority.is_none()
+        && p.kind.is_none()
+        && p.project.is_none()
+        && p.due.is_none()
+        && p.module.is_none();
+    let closing = only_status
+        && match p.status.as_deref() {
+            Some(target) => tx
+                .query_opt(
+                    "select 1 from statuses where name = $1 and grp = 'complete'",
+                    &[&target],
+                )
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            None => false,
+        };
+
+    if !p.force && !closing {
         match claim::requires_force(&tx, &current).await {
             Ok(true) => {
                 return (
