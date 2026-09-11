@@ -20,6 +20,7 @@ pub struct Ntk {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LsArgs {
     // Воркспейс. Обязателен: значения по умолчанию нет.
     pub workspace: String,
@@ -51,6 +52,7 @@ pub struct LsArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ShowArgs {
     // Идентификатор вида proj-xxxxxxxxxx. Регистр не важен.
     pub id: String,
@@ -58,6 +60,7 @@ pub struct ShowArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IdArgs {
     // Идентификатор вида proj-xxxxxxxxxx. Регистр не важен.
     pub id: String,
@@ -65,11 +68,13 @@ pub struct IdArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct WsArgs {
     pub workspace: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SimilarArgs {
     pub workspace: String,
     pub text: Option<String>,
@@ -86,6 +91,7 @@ pub struct SimilarArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ModulesArgs {
     pub workspace: String,
     // Проект. Без него — модули всех проектов воркспейса.
@@ -93,6 +99,7 @@ pub struct ModulesArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ModulesReplaceArgs {
     pub workspace: String,
     pub project: String,
@@ -101,6 +108,7 @@ pub struct ModulesReplaceArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ModulesAddArgs {
     pub workspace: String,
     pub project: String,
@@ -110,6 +118,7 @@ pub struct ModulesAddArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CloseArgs {
     pub id: String,
     pub workspace: String,
@@ -118,6 +127,7 @@ pub struct CloseArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TagArgs {
     pub id: String,
     pub workspace: String,
@@ -131,6 +141,7 @@ pub struct TagArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NextArgs {
     pub workspace: String,
     // Теги в порядке предпочтения, через запятую. ПОРЯДОК, а не фильтр:
@@ -159,6 +170,7 @@ pub struct NextArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateArgs {
     pub workspace: String,
     // Проект — префикс идентификатора тикета.
@@ -188,6 +200,7 @@ pub struct CreateArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateArgs {
     pub workspace: String,
     pub id: String,
@@ -241,6 +254,7 @@ pub struct UpdateArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct WalkArgs {
     // Отбор по модулю — единице работы внутри проекта.
     pub module: Option<String>,

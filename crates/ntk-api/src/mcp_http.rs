@@ -121,11 +121,57 @@ fn hdrs(token: &str) -> HeaderMap {
     h
 }
 
+/// Аргумент, которого у инструмента нет, — это ОТКАЗ, а не мусор на выброс.
+///
+/// Диспетчер собирает запрос из фиксированного списка ключей, и всё остальное
+/// раньше просто не доезжало. Снаружи это выглядело хуже некуда: вызов
+/// ntk_update с полем `deps` (такого нет — есть dep_edits и dep_set) отвечал
+/// {"updated": true} и isError: false, НЕ СДЕЛАВ НИЧЕГО. Запись, которая ничего
+/// не записала, отчитывалась успехом; исполнитель искал потерю связей в базе, а
+/// терялось имя поля на границе. Тем же способом ntk_deps принимал `add` —
+/// инструмент только читает, но ответ выглядел как выполненная правка.
+///
+/// Список полей берётся из каталога, того же, из которого собрано описание
+/// инструмента. Второго списка нет и быть не может: он разошёлся бы с первым.
+fn unknown_arguments(name: &str, args: &Value) -> Option<String> {
+    let tool = ntk_core::tools::get(name)?;
+    let obj = args.as_object()?;
+    let known: Vec<String> = tool.fields.iter().map(|f| f.name.to_string()).collect();
+    let mut bad: Vec<String> = obj
+        .keys()
+        .filter(|k| !known.iter().any(|f| f == *k))
+        .cloned()
+        .collect();
+    if bad.is_empty() {
+        return None;
+    }
+    bad.sort();
+    // Опечатку от незнания отличаем сразу: «deps» рядом с dep_edits и dep_set —
+    // это почти наверняка не то слово, а не выдуманное поле.
+    let hints: Vec<String> = bad
+        .iter()
+        .flat_map(|b| crate::write::near_misses(b, &known))
+        .collect();
+    let mut msg = format!(
+        "{name} has no argument {}. It takes: {}.",
+        bad.join(", "),
+        known.join(", ")
+    );
+    if !hints.is_empty() {
+        msg.push_str(&format!(" Did you mean: {}?", hints.join(", ")));
+    }
+    Some(msg)
+}
+
 async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bool, String) {
     let st = State(app.clone());
     let h = hdrs(token);
     let ws = s(args, "workspace");
     let id = s(args, "id").unwrap_or_default();
+
+    if let Some(msg) = unknown_arguments(name, args) {
+        return (false, msg);
+    }
 
     match name {
         "ntk_whoami" => body_text(crate::whoami(st, h).await).await,
