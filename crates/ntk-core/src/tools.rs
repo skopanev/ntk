@@ -457,7 +457,7 @@ pub const ALL: &[Tool] = &[
             PROJECT_PICK,
             MODULE_PICK,
             Field::opt("limit", Ty::Int, "How many to return. 10 by default, 20 at most."),
-            Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1, 0.75 by default. Measured on real tickets: a reworded duplicate scores 0.78-0.80, unrelated work about 0.50, and the closest pair among non-duplicates 0.76 — so the default sits just under the duplicates. Lower it to see more and weaker matches, raise it to see only near-identical text."),
+            Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1. Omit it and the workspace policy decides — there is no fixed number here, because the right one depends on the corpus. Measured on a live workspace of 4179 tickets: lowering the bar does NOT simply find more duplicates, because the distributions overlap — a reworded duplicate scored 0.639 while unrelated work in the same area scored 0.677. Pass a low value to see the tail and judge for yourself; pass a high one to see near-copies only."),
         ],
     },
     Tool {
