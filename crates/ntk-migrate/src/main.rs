@@ -46,6 +46,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("028_vector_stop_policy", include_str!("../../../sql/028_vector_stop_policy.sql")),
     ("029_drop_unused_meta_index", include_str!("../../../sql/029_drop_unused_meta_index.sql")),
     ("030_embed_input_full_ticket", include_str!("../../../sql/030_embed_input_full_ticket.sql")),
+    ("031_show_and_block_are_two_numbers", include_str!("../../../sql/031_show_and_block_are_two_numbers.sql")),
+    ("032_text_language_policy", include_str!("../../../sql/032_text_language_policy.sql")),
 ];
 
 #[tokio::main]

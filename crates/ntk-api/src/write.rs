@@ -590,8 +590,9 @@ pub async fn patch(
                         StatusCode::BAD_REQUEST,
                         &format!(
                             "the ticket is already over the limit ({was} against {max}); appending is allowed, \
-                             but not more than {max} characters at a time — {add} arrived. Split it into \
-                             separate tickets and link them with --deps."
+                             but not more than {max} characters at a time — {add} arrived, which is {0} too many. \
+                             Split it into separate tickets and link them with --deps.",
+                            add.saturating_sub(max)
                         ),
                     );
                 }
@@ -814,7 +815,7 @@ pub async fn similar(
                 "vectorisation is switched off in this workspace: there is nothing to search",
             );
         }
-        policy_min = vector_stop_policy(&tx).await.map(|(_, m)| m).unwrap_or(policy_min);
+        policy_min = vector_stop_policy(&tx).await.map(|(_, m, _)| m).unwrap_or(policy_min);
         let canonical = match canonical_id(&tx, id).await {
             Some(c) => c,
             None => return oops(StatusCode::NOT_FOUND, "no such ticket"),
@@ -846,7 +847,7 @@ pub async fn similar(
                 return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
             }
         };
-        policy_min = vector_stop_policy(&tx).await.map(|(_, m)| m).unwrap_or(policy_min);
+        policy_min = vector_stop_policy(&tx).await.map(|(_, m, _)| m).unwrap_or(policy_min);
         tx.commit().await.ok();
         if !enabled {
             return oops(
@@ -924,53 +925,105 @@ pub async fn create(
     // Поиск похожих ДО заведения — и до открытия транзакции: обращение к
     // провайдеру занимает секунды, а транзакция, открытая на это время, держала
     // бы соединение и блокировки впустую.
+    // Алфавит проверяем ДО поиска похожих: платить провайдеру за текст, который
+    // сейчас отвергнем, незачем.
+    //
+    // Три состояния, и выбирает их владелец воркспейса: не проверять,
+    // предупредить, отвергнуть. Начинать с отказа — значит научить людей
+    // обходить правило раньше, чем они поймут, чего оно хочет.
+    let language_warning: Option<String> = {
+        let mixed = has_cyrillic(&p.title) || p.body.as_deref().is_some_and(has_cyrillic);
+        if !mixed {
+            None
+        } else {
+            let mode = match db::begin(&mut client, &ws).await {
+                Ok(tx) => {
+                    let m = text_language_policy(&tx).await;
+                    tx.commit().await.ok();
+                    m.unwrap_or_else(|_| "any".into())
+                }
+                Err(_) => "any".into(),
+            };
+            match mode.as_str() {
+                "latin" => {
+                    return oops(
+                        StatusCode::BAD_REQUEST,
+                        "this workspace keeps tickets in English: the title and body must not \
+                         contain Cyrillic. Rewrite them, or ask the owner to relax the policy.",
+                    )
+                }
+                "warn" => Some(
+                    "This workspace keeps tickets in English. Cyrillic in a title or body makes \
+                     the ticket harder to read and invisible to duplicate search, which compares \
+                     text: the same work written in two languages never meets."
+                        .to_string(),
+                ),
+                _ => None,
+            }
+        }
+    };
+
+    // Показываем и блокируем ПО РАЗНЫМ порогам, и это не тонкость.
+    //
+    // Одно число решало обе задачи, а решения разные. Опущенное до 0.60 ради
+    // полноты списка, оно отвергало бы 36 заведений из 40 — измерено на живом
+    // корпусе. Довод «ложное срабатывание стоит одного взгляда» верен для
+    // СПИСКА и неверен для ОТКАЗА: отказ стоит второго вызова с флагом, а
+    // флаг, который ставят каждый раз, перестаёт что-либо значить.
+    // Поэтому список берётся с низкого порога — не режем ничего, — а
+    // останавливает только высокий, где живут почти-копии. Между ними тикет
+    // ЗАВОДИТСЯ и уносит список с собой: агент всё равно его увидит.
     let searching = if p.skip_search { None } else { app.vector.clone() };
+    let mut similar_seen: Vec<crate::vector::Similar> = Vec::new();
     if let Some(v) = searching {
-            let (stopping, min_score) = {
-                match db::begin(&mut client, &ws).await {
-                    Ok(tx) => {
-                        let on = vector_enabled(&tx).await;
-                        let pol = vector_stop_policy(&tx).await;
-                        tx.commit().await.ok();
-                        match (on, pol) {
-                            (Ok(true), Ok((stop, score))) => (stop, score),
-                            (Ok(_), Ok(_)) => (false, crate::vector::NEAR_DUPLICATE),
-                            (Err(err), _) | (_, Err(err)) => {
-                                tracing::error!(error = %err, workspace = %ws, "vector policy did not read");
-                                (false, crate::vector::NEAR_DUPLICATE)
-                            }
+        let (stopping, show_score, block_score) = {
+            match db::begin(&mut client, &ws).await {
+                Ok(tx) => {
+                    let on = vector_enabled(&tx).await;
+                    let pol = vector_stop_policy(&tx).await;
+                    tx.commit().await.ok();
+                    match (on, pol) {
+                        (Ok(true), Ok(p)) => p,
+                        (Ok(_), Ok(_)) => (false, crate::vector::NEAR_DUPLICATE, crate::vector::NEAR_DUPLICATE),
+                        (Err(err), _) | (_, Err(err)) => {
+                            tracing::error!(error = %err, workspace = %ws, "vector policy did not read");
+                            (false, crate::vector::NEAR_DUPLICATE, crate::vector::NEAR_DUPLICATE)
                         }
                     }
-                    Err(_) => (false, crate::vector::NEAR_DUPLICATE),
                 }
-            };
-            if stopping {
-                let body = p.body.clone().unwrap_or_default();
-                match crate::vector::similar(
-                    &v,
-                    &app.pool,
-                    &ws,
-                    &p.title,
-                    &body,
-                    crate::vector::SIMILAR_LIMIT,
-                    min_score,
-                    // На заведении отбора нет намеренно: дубль закрытого тикета
-                    // — самое ценное, что здесь можно сказать.
-                    None,
-                )
-                .await
-                {
-                    Ok(hits) if !hits.is_empty() => {
-                        // Верхняя оценка в журнал: порог выбран на тридцати
-                        // тикетах, и вторую его итерацию надо считать по
-                        // накопленному на живом объёме, а не по новому предположению.
-                        tracing::info!(
-                            workspace = %ws,
-                            found = hits.len(),
-                            top = hits[0].score,
-                            top_ticket = %hits[0].id,
-                            "заведение остановлено: похожие уже есть"
-                        );
+                Err(_) => (false, crate::vector::NEAR_DUPLICATE, crate::vector::NEAR_DUPLICATE),
+            }
+        };
+        if stopping {
+            let body = p.body.clone().unwrap_or_default();
+            match crate::vector::similar(
+                &v,
+                &app.pool,
+                &ws,
+                &p.title,
+                &body,
+                crate::vector::SIMILAR_LIMIT,
+                show_score,
+                // На заведении отбора нет намеренно: дубль закрытого тикета
+                // — самое ценное, что здесь можно сказать.
+                None,
+            )
+            .await
+            {
+                Ok(hits) if !hits.is_empty() => {
+                    let top = hits[0].score;
+                    // Верхнюю оценку пишем ВСЕГДА, а не только при отказе:
+                    // по ней потом считать оба порога, и «показали, но не
+                    // остановили» — тоже наблюдение.
+                    tracing::info!(
+                        workspace = %ws,
+                        found = hits.len(),
+                        top,
+                        top_ticket = %hits[0].id,
+                        blocked = top >= block_score,
+                        "похожие найдены при заведении"
+                    );
+                    if top >= block_score {
                         return (
                             StatusCode::CONFLICT,
                             Json(json!({
@@ -980,18 +1033,20 @@ pub async fn create(
                         )
                             .into_response();
                     }
-                    Ok(_) => {}
-                    // Провайдер лёг — заводим. Иначе его отказ останавливал бы
-                    // всю работу команды, а цена ошибки здесь несравнима:
-                    // пропущенный дубль правится, ненаведённый тикет теряется.
-                    Err(e) => tracing::warn!(
-                        error = %e,
-                        workspace = %ws,
-                        "похожих не искал, завожу как есть"
-                    ),
+                    similar_seen = hits;
                 }
+                Ok(_) => {}
+                // Провайдер лёг — заводим. Иначе его отказ останавливал бы
+                // всю работу команды, а цена ошибки здесь несравнима:
+                // пропущенный дубль правится, ненаведённый тикет теряется.
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    workspace = %ws,
+                    "похожих не искал, завожу как есть"
+                ),
             }
         }
+    }
 
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
@@ -1143,7 +1198,20 @@ pub async fn create(
     tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, "тикет создан");
     // Будим слив ПОСЛЕ коммита: до него долга ещё нет, и будить нечего.
     crate::vector::wake(&app);
-    (StatusCode::CREATED, Json(json!({"id": id, "status": status}))).into_response()
+    // Похожие уносим в ответ, даже когда не остановили: агент должен их
+    // увидеть, иначе низкий порог показа не значит ничего.
+    let mut out = json!({"id": id, "status": status});
+    if !similar_seen.is_empty() {
+        out["similar"] = json!(similar_seen);
+        out["notice"] = json!(
+            "Similar tickets exist. Not close enough to refuse, close enough to read \
+             before you start: if one of them is the same work, edit it instead."
+        );
+    }
+    if let Some(w) = language_warning {
+        out["warning"] = json!(w);
+    }
+    (StatusCode::CREATED, Json(out)).into_response()
 }
 
 /// Дерево зависимостей: на чём стоит тикет и что стоит на нём.
@@ -2240,14 +2308,21 @@ async fn write_limit(tx: &deadpool_postgres::Transaction<'_>, field: &str) -> Op
 /// Без «что делать» предел просто мешает: человек видит отказ и всё равно
 /// вынужден угадывать. Оба выхода настоящие — вложения у тикета есть, а
 /// разбиение на атомарные тикеты и есть цель предела.
+/// Отказ обязан называть, СКОЛЬКО ЛИШНЕГО, а не только предел.
+///
+/// «2100 при 2000» вычитается в уме, но вычитать приходится каждый раз, и в
+/// живой работе так не делают: пришло снаружи, что человек четыре раза подряд
+/// резал по пятьдесят знаков вслепую, потому что отказ не назвал перебор.
+/// Число, которое читателю придётся считать самому, лучше посчитать за него.
 fn too_long(field: &str, got: usize, max: i32) -> String {
     let what = match field {
         "title" => "the title",
         _ => "the body",
     };
+    let over = got.saturating_sub(max.max(0) as usize);
     if field == "title" {
         return format!(
-            "{what} is over the limit: {got} characters against {max}. A title is one line about WHAT to do; the detail belongs in the body."
+            "{what} is over the limit by {over} characters: {got} against {max}. A title is one line about WHAT to do; the detail belongs in the body."
         );
     }
     // Про вложения здесь НЕ говорим: ручки на сервисе есть, но ни один клиент
@@ -2255,9 +2330,9 @@ fn too_long(field: &str, got: usize, max: i32) -> String {
     // человека делать невозможное, да ещё и ссылался на флаг -i из прежнего
     // JS-клиента, которого в этом CLI нет.
     format!(
-        "{what} is over the limit: {got} characters against {max}. Split the work into separate \
-         tickets and link them with --deps: the limit exists so a ticket can be read whole and \
-         stays one unit of work."
+        "{what} is over the limit by {over} characters: {got} against {max}. Cut {over} or split \
+         the work into separate tickets and link them with --deps: the limit exists so a ticket \
+         can be read whole and stays one unit of work."
     )
 }
 
@@ -2280,6 +2355,17 @@ async fn check_len(
     }
     if previous.is_some_and(|p| got <= p) {
         return None;
+    }
+    // У тикета, который УЖЕ сверх предела, потолок не 2000, а его нынешняя
+    // длина: правило для него — «не расти». Называть в отказе предел значило бы
+    // звать резать до 2000, тогда как хватит вернуться к прежнему размеру.
+    if let Some(was) = previous.filter(|p| *p > max.max(0) as usize) {
+        let over = got - was;
+        let what = if field == "title" { "the title" } else { "the body" };
+        return Some(format!(
+            "{what} is already over the limit ({was} against {max}), so it may not GROW — and this \
+             adds {over}. Bring it back to {was} characters or fewer, or cut it to {max} and be done."
+        ));
     }
     Some(too_long(field, got, max))
 }
@@ -2447,12 +2533,34 @@ pub(crate) async fn vector_enabled(
 /// and moving it must not need a release.
 pub(crate) async fn vector_stop_policy(
     tx: &deadpool_postgres::Transaction<'_>,
-) -> anyhow::Result<(bool, f64)> {
+) -> anyhow::Result<(bool, f64, f64)> {
     Ok(tx
-        .query_opt("select stop_on_similar, min_score from vector_policy where only_row", &[])
+        .query_opt(
+            "select stop_on_similar, min_score, block_score from vector_policy where only_row",
+            &[],
+        )
         .await?
-        .map(|r| (r.get(0), r.get(1)))
-        .unwrap_or((false, crate::vector::NEAR_DUPLICATE)))
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .unwrap_or((false, crate::vector::NEAR_DUPLICATE, crate::vector::NEAR_DUPLICATE)))
+}
+
+/// Что делать с кириллицей в тексте тикета: ничего, предупредить, отвергнуть.
+///
+/// Проверяем именно АЛФАВИТ, а не язык. Определить язык — догадка, определить
+/// алфавит — факт, и правило не должно обещать больше, чем проверяет.
+pub(crate) async fn text_language_policy(
+    tx: &deadpool_postgres::Transaction<'_>,
+) -> anyhow::Result<String> {
+    Ok(tx
+        .query_opt("select language from text_policy where only_row", &[])
+        .await?
+        .map(|r| r.get(0))
+        .unwrap_or_else(|| "any".to_string()))
+}
+
+/// Есть ли в тексте кириллица.
+pub(crate) fn has_cyrillic(text: &str) -> bool {
+    text.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c))
 }
 
 #[cfg(test)]
