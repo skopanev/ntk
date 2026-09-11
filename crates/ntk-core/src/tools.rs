@@ -345,7 +345,7 @@ pub const ALL: &[Tool] = &[
             Field::opt("status", Ty::Str, "Starting status. Without it the server takes the first one in the todo group."),
             KIND,
             Field::opt("deps", Ty::StrList, "Identifiers of the tickets this one waits for."),
-            Field::opt("skip_search", Ty::Bool, "File the ticket without looking for existing ones that already say the same thing. Where vectorisation is switched on, creating searches first and REFUSES if it finds a likely duplicate, listing what it found; set this to file anyway. Read the list before you set it — the point of the stop is that the work may already be in the queue."),
+            Field::opt("skip_search", Ty::Bool, "File the ticket without looking for existing ones that already say the same thing. THIS IS AN EXCEPTION, NOT A WORKAROUND: use it only when the work genuinely cannot wait and you have read the list and seen that none of it is the same. The check is not yours to waive — it exists because a duplicate costs two people doing one job, and whoever sets this flag is the only one who could have caught that. Set it routinely and it stops meaning anything, exactly like a force flag that everyone passes. If a refusal looks wrong, say so — and quote the score. The threshold is NOT to be moved on one case: it was set from measurements over the whole workspace, and one surprising refusal is data, not a verdict. Every use of this flag is recorded."),
         ],
     },
     Tool {
@@ -457,7 +457,7 @@ pub const ALL: &[Tool] = &[
             PROJECT_PICK,
             MODULE_PICK,
             Field::opt("limit", Ty::Int, "How many to return. 10 by default, 20 at most."),
-            Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1. Omit it and the workspace policy decides — there is no fixed number here, because the right one depends on the corpus. Measured on a live workspace of 4179 tickets: lowering the bar does NOT simply find more duplicates, because the distributions overlap — a reworded duplicate scored 0.639 while unrelated work in the same area scored 0.677. Pass a low value to see the tail and judge for yourself; pass a high one to see near-copies only."),
+            Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1. Omit it and the workspace policy decides — there is no fixed number here, because the right one depends on the corpus. Measured on a live workspace of 4179 tickets: lowering the bar does NOT simply find more duplicates, because the distributions overlap — a reworded duplicate scored 0.639 while unrelated work in the same area scored 0.677. Pass a low value to see the tail and judge for yourself; pass a high one to see near-copies only. Passing it here costs nothing and changes nothing — the workspace default is a separate decision, made from measurements across the whole corpus, and it is not to be moved because one search surprised you."),
         ],
     },
     Tool {
