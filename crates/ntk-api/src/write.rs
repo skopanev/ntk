@@ -577,7 +577,9 @@ pub async fn patch(
         if let Some(max) = write_limit(&tx, "body").await {
             let max = max as usize;
             let was = was_body.unwrap_or(0);
-            let add = a.chars().count();
+            // Разделитель занимает место и считается: без этого тикет у самой
+            // границы проходил бы проверку и упирался в предел уже записью.
+            let add = a.chars().count() + if was > 0 { 2 } else { 0 };
             if was > max {
                 // Тикет УЖЕ сверх предела — он из времён до предела. Дописать в
                 // него короткую ссылку на доказательство можно: запрет заморозил
@@ -621,9 +623,17 @@ pub async fn patch(
             "update tickets set
                status     = coalesce($2, status),
                title      = coalesce($3, title),
-               body       = case when $6::text is not null
-                                then coalesce($4, body) || $6::text
-                                else coalesce($4, body) end,
+               -- Дописанное отделяется ПУСТОЙ СТРОКОЙ, а не клеится встык.
+               -- Склейка давала «BBB» + «CCC» = «BBBCCC»: проверено, и это не
+               -- гипотеза. Одного перевода строки мало — тело в markdown, и один
+               -- перевод не разрывает абзац, то есть выглядело бы так же слипшимся.
+               -- Хвостовые переводы строки срезаются, чтобы не копить пустые
+               -- строки при нескольких дописываниях подряд.
+               body       = case
+                              when $6::text is null then coalesce($4, body)
+                              when coalesce($4, body) = '' then $6::text
+                              else rtrim(coalesce($4, body), chr(10)) || chr(10) || chr(10) || $6::text
+                            end,
                assignee   = coalesce($5, assignee),
                priority   = coalesce($7, priority),
                type       = coalesce($8, type),

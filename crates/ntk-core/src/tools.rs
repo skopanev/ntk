@@ -363,7 +363,7 @@ pub const ALL: &[Tool] = &[
             Field::opt("status", Ty::Str, "New status. Changing a ticket outside the todo group needs force."),
             Field::opt("title", Ty::Str, "Title, at most 256 characters. English.").capped(TITLE_MAX),
             Field::opt("body", Ty::Str, "The whole body, at most 2000 characters. REPLACES the previous one: to add a line use body_append. English.").capped(BODY_MAX),
-            Field::opt("body_append", Ty::Str, "Append to the end of the body without touching what is written. Not accepted together with body. The 2000 limit counts the RESULT of the join: appending into a full ticket is refused, not silently truncated."),
+            Field::opt("body_append", Ty::Str, "Append to the end of the body without touching what is written — the two are separated by a BLANK LINE, so the addition reads as its own paragraph rather than running into the last sentence. Not accepted together with body; body REPLACES, this one adds. The 2000 limit counts the RESULT of the join, separator included: appending into a full ticket is refused, not silently truncated."),
             ASSIGNEE_SET,
             Field::opt("tag_edits", Ty::StrList, "Every edit carries a sign: [\"+alpha\",\"-legacy\"]. The sign is required, otherwise \"add\" will one day turn out to be \"replace everything\"."),
             Field::opt("dep_edits", Ty::StrList, "Dependency edits, each with a sign: [\"+proj-abc\",\"-proj-xyz\"]. Plus starts waiting for that ticket, minus stops. The sign is required for the same reason as on tags: a bare list would one day mean \"replace them all\" and links would vanish silently. The target must exist — an edge to nowhere turns \"waiting for that ticket\" into \"waiting for nothing\", and nobody finds out."),
