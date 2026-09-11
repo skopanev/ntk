@@ -456,7 +456,7 @@ pub const ALL: &[Tool] = &[
             Field::opt("assignee", Ty::Str, "Only this person's tickets. By default everyone's are searched: a duplicate is filed over somebody else's ticket more often than over your own."),
             PROJECT_PICK,
             MODULE_PICK,
-            Field::opt("limit", Ty::Int, "How many to return. 5 by default, 20 at most."),
+            Field::opt("limit", Ty::Int, "How many to return. 10 by default, 20 at most."),
             Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1, 0.75 by default. Measured on real tickets: a reworded duplicate scores 0.78-0.80, unrelated work about 0.50, and the closest pair among non-duplicates 0.76 — so the default sits just under the duplicates. Lower it to see more and weaker matches, raise it to see only near-identical text."),
         ],
     },
