@@ -14,6 +14,9 @@ KEY="releases/${PLATFORM}/ntk-${VERSION}"
 BIN=target/release/ntk
 LINUX_PLATFORM=linux-x86_64
 LINUX_KEY="releases/${LINUX_PLATFORM}/ntk-${VERSION}"
+ARM_PLATFORM=linux-arm64
+ARM_KEY="releases/${ARM_PLATFORM}/ntk-${VERSION}"
+ARM_TARGET=aarch64-unknown-linux-musl
 
 # Адрес дроплета — из окружения: репозиторий публичный, и молчаливое умолчание
 # на боевую машину означало бы выкатку не туда у любого, кто просто склонировал.
@@ -110,3 +113,49 @@ ssh "$HOST" "set -a; . /etc/ntk/api.env; set +a
        values ('${VERSION}', '${LINUX_KEY}', '${LINUX_SHA}', '${LINUX_PLATFORM}')
        on conflict (version, platform) do update set object_key=excluded.object_key, sha256=excluded.sha256, published_at=now()\""
 echo "выпущено: ${VERSION} для ${LINUX_PLATFORM}"
+
+# ---------------------------------------------------------------------------
+# linux-arm64 — тоже на дроплете, но КРОСС-СБОРКОЙ и СТАТИЧЕСКИ, под musl.
+#
+# Статически не ради изящества: бинарь ставят в контейнер, и связка с glibc
+# хозяина означала бы, что сборка годится ровно для того образа, где собрана.
+# Debian, Alpine, чужая версия Ubuntu — с musl всё равно.
+#
+# Линкер берём aarch64-linux-gnu-gcc: под musl-цель он годится, потому что
+# линкуется всё статически и системная библиотека хозяина не участвует. Ставить
+# отдельную musl-цепочку под aarch64 ради этого незачем.
+#
+# Подпись Apple здесь не нужна и не применима, как и для x86_64: Gatekeeper —
+# механизм macOS. Целостность проверяется контрольной суммой.
+echo
+echo "== сборка ${ARM_PLATFORM} на дроплете (кросс, статически)"
+ssh "$HOST" "cd /opt/ntk/src
+  export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc
+  export CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc
+  /root/.cargo/bin/cargo build --release --bin ntk --target ${ARM_TARGET} 2>&1 | tail -1"
+
+# Проверяем, ЧТО собрали, а не только что команда не упала: цель можно задать и
+# получить хозяйский бинарь, если линкер молча подставит своё.
+ssh "$HOST" "f=/opt/ntk/src/target/${ARM_TARGET}/release/ntk
+  file \"\$f\" | grep -q 'ARM aarch64' || { echo '  не aarch64'; exit 1; }
+  file \"\$f\" | grep -q 'statically linked' || { echo '  не статический'; exit 1; }
+  echo '  aarch64, статический'"
+
+ARM_SHA=$(ssh "$HOST" "sha256sum /opt/ntk/src/target/${ARM_TARGET}/release/ntk | cut -d' ' -f1")
+echo "== sha256 ${ARM_SHA}"
+
+echo "== в Spaces: ${ARM_KEY}"
+ssh "$HOST" "set -a; . /etc/ntk/api.env; set +a
+  curl -fsS --aws-sigv4 \"aws:amz:\${SPACES_REGION}:s3\" \
+       --user \"\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}\" \
+       -T /opt/ntk/src/target/${ARM_TARGET}/release/ntk \"\${SPACES_ENDPOINT}/\${SPACES_BUCKET}/${ARM_KEY}\"
+  code=\$(curl -sS -o /dev/null -w '%{http_code}' -I --aws-sigv4 \"aws:amz:\${SPACES_REGION}:s3\" \
+    --user \"\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}\" \
+    \"\${SPACES_ENDPOINT}/\${SPACES_BUCKET}/${ARM_KEY}\")
+  [ \"\$code\" = 200 ] || { echo \"  объект не загрузился: HTTP \$code\"; exit 1; }
+  echo '  объект на месте'
+  set -a; . /etc/ntk/admin.env; set +a
+  psql \"\$DATABASE_URL\" -q -c \"insert into core.releases (version, object_key, sha256, platform)
+       values ('${VERSION}', '${ARM_KEY}', '${ARM_SHA}', '${ARM_PLATFORM}')
+       on conflict (version, platform) do update set object_key=excluded.object_key, sha256=excluded.sha256, published_at=now()\""
+echo "выпущено: ${VERSION} для ${ARM_PLATFORM}"
