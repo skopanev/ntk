@@ -447,7 +447,7 @@ pub const ALL: &[Tool] = &[
         idempotent: true,
         fields: &[
             WS,
-            Field::opt("text", Ty::Str, "The text to look for: a title, a sentence, or the whole ticket you are about to file. Only the first 2000 characters take part.").capped(BODY_MAX),
+            Field::opt("text", Ty::Str, "The text to look for: a title, a sentence, or the whole ticket you are about to file. Only the first 2257 characters take part — exactly what a legal ticket joins to.").capped(BODY_MAX),
             Field::opt("body", Ty::Str, "More text, joined to `text`. Convenient when the title and the body are already separate.").capped(BODY_MAX),
             Field::opt("id", Ty::Str, "Look for tickets similar to THIS existing one, instead of passing text. Not accepted together with text or body."),
             Field::opt("status", Ty::Str, "Comma-separated statuses to look in: \"open,in_progress\". By DEFAULT every status is searched, closed ones included — a duplicate of something already done is the most useful thing this can tell you. Narrow it when you only care about live work."),
