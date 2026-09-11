@@ -13,19 +13,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-/// Потолок обращений к провайдеру: 5 в секунду, задан владельцем.
+/// Потолок обращений к провайдеру, в минуту. Столько разрешает он сам.
 ///
-/// Держим интервалом между отправками, а не счётчиком в окне: интервал не даёт
-/// всплеска в начале секунды, а всплеск на одном ядре рядом с Postgres хуже
-/// ровной нагрузки.
-const MIN_GAP: Duration = Duration::from_millis(200);
+/// Стояло 5 в секунду — это 300 в минуту, в полтора раза выше их потолка.
+/// Отказов мы не увидели: провайдер их не слал, а параллельность в четыре при
+/// задержке в секунды и не давала выйти на потолок. Но опираться на «пока не
+/// упёрлись» нельзя: ускорься мы — упёрлись бы сразу.
+const PROVIDER_RPM: usize = 200;
+
+/// Окно, в котором считается потолок. Ровно минута, потому что и потолок задан
+/// в минуту: считать в другом окне значит считать не то, что ограничивают.
+const WINDOW: Duration = Duration::from_secs(60);
 
 /// Сколько тикетов обрабатываем одновременно.
 ///
 /// Четыре, а не больше: задержка embedding у провайдера от трети секунды до
 /// восемнадцати, и без параллельности тридцать тикетов заняли бы девять минут.
 /// Но ядро одно, поэтому больше четырёх только отнимало бы его у базы, не
-/// ускоряя: потолок всё равно упирается в MIN_GAP.
+/// ускоряя: выше всё равно не пустит потолок в минуту.
 const CONCURRENCY: usize = 4;
 
 /// Размерность Qwen3-Embedding-8B. Проверена живым вызовом, не взята из
@@ -63,10 +68,16 @@ pub struct Vector {
     http: reqwest::Client,
     key: String,
     qdrant: String,
-    /// Время последней отправки провайдеру — общее на процесс. Именно поэтому
-    /// потолок глобальный: три включённых воркспейса не дают пятнадцать в
-    /// секунду вместо пяти.
-    last_send: Arc<Mutex<Instant>>,
+    /// Моменты отправок за последнюю минуту — общие на процесс. Именно поэтому
+    /// потолок глобальный: три включённых воркспейса не дают шестьсот в минуту
+    /// вместо двухсот.
+    ///
+    /// Очередь, а не «время последней отправки»: последнее задаёт лишь ИНТЕРВАЛ
+    /// и бюджет недоиспользует — если запрос занял две секунды, минута всё
+    /// равно потрачена, а отправок в ней было мало. Окно считает то, что
+    /// ограничивают на самом деле: сколько обращений пришлось на последние
+    /// шестьдесят секунд.
+    sent: Arc<Mutex<std::collections::VecDeque<Instant>>>,
     slots: Arc<Semaphore>,
 }
 
@@ -85,19 +96,46 @@ impl Vector {
             key,
             qdrant: std::env::var("QDRANT_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:6333".into()),
-            last_send: Arc::new(Mutex::new(Instant::now() - MIN_GAP)),
+            sent: Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(PROVIDER_RPM))),
             slots: Arc::new(Semaphore::new(CONCURRENCY)),
         })
     }
 
     /// Ждёт своей очереди к провайдеру. Глобально на процесс.
+    /// Пропускает отправку, когда за последнюю минуту их было меньше потолка.
+    ///
+    /// Скользящее окно, а не интервал между отправками. Интервал проще, но он
+    /// решает не ту задачу: провайдер считает обращения за минуту, а не
+    /// расстояние между ними, и ровный шаг в 300 мс отдаёт весь бюджет только
+    /// если каждый запрос мгновенный. Наши идут от трети секунды до
+    /// восемнадцати — с интервалом минута уходила недоиспользованной, а
+    /// ограничение при этом всё равно не гарантировалось строго.
+    ///
+    /// Спим ровно до того мига, когда САМАЯ СТАРАЯ отправка выйдет из окна, —
+    /// не фиксированный шаг и не опрос. После пробуждения проверяем заново:
+    /// пока мы спали, место могли занять соседние задачи.
+    ///
+    /// Блокировка держится только на время правки очереди; сон идёт БЕЗ неё,
+    /// иначе ожидающий держал бы остальных и потолок превратился бы в
+    /// однопоточную очередь.
     async fn pace(&self) {
-        let mut last = self.last_send.lock().await;
-        let since = last.elapsed();
-        if since < MIN_GAP {
-            tokio::time::sleep(MIN_GAP - since).await;
+        loop {
+            let wait = {
+                let mut q = self.sent.lock().await;
+                let now = Instant::now();
+                while q.front().is_some_and(|t| now.duration_since(*t) >= WINDOW) {
+                    q.pop_front();
+                }
+                match q.front() {
+                    Some(oldest) if q.len() >= PROVIDER_RPM => WINDOW - now.duration_since(*oldest),
+                    _ => {
+                        q.push_back(now);
+                        return;
+                    }
+                }
+            };
+            tokio::time::sleep(wait).await;
         }
-        *last = Instant::now();
     }
 
     /// Коллекция создаётся при первом обращении и не пересоздаётся.
@@ -415,6 +453,7 @@ pub struct Similar {
 /// нагрузки точки значило бы показывать то, чего уже нет, и с уверенным видом.
 /// Поэтому Qdrant отвечает только «на кого смотреть», а что показать —
 /// решает база.
+#[allow(clippy::too_many_arguments)]
 pub async fn similar(
     v: &Vector,
     pool: &deadpool_postgres::Pool,
@@ -1144,4 +1183,73 @@ pub fn retry_ticks(state: &Arc<crate::App>) {
             wake(&st);
         }
     });
+}
+
+#[cfg(test)]
+mod pace_tests {
+    use super::{PROVIDER_RPM, WINDOW};
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
+
+    /// Та же логика окна, что в `Vector::pace`, без сети и без сна.
+    ///
+    /// Проверяем свойство, ради которого оно и написано: в ЛЮБОМ окне длиной в
+    /// минуту отправок не больше потолка. Интервал между отправками этого не
+    /// гарантирует — он гарантирует только расстояние.
+    fn admit(q: &mut VecDeque<Instant>, now: Instant) -> bool {
+        while q.front().is_some_and(|t| now.duration_since(*t) >= WINDOW) {
+            q.pop_front();
+        }
+        if q.len() >= PROVIDER_RPM {
+            return false;
+        }
+        q.push_back(now);
+        true
+    }
+
+    #[test]
+    fn never_more_than_the_cap_in_any_minute() {
+        let start = Instant::now();
+        let mut q = VecDeque::new();
+        let mut stamps: Vec<Instant> = Vec::new();
+
+        // Просим мгновенно и без пауз: так ведёт себя слив, когда провайдер
+        // отвечает быстро, и именно тогда потолок и нужен.
+        for ms in 0..120_000u64 {
+            let now = start + Duration::from_millis(ms);
+            if admit(&mut q, now) {
+                stamps.push(now);
+            }
+        }
+
+        // Бюджет используется: за две минуты должно пройти около двух потолков.
+        assert!(stamps.len() >= PROVIDER_RPM, "бюджет недоиспользован: {}", stamps.len());
+
+        // И ни в одном окне его не превышает.
+        for (i, t) in stamps.iter().enumerate() {
+            let in_window = stamps[i..]
+                .iter()
+                .take_while(|u| u.duration_since(*t) < WINDOW)
+                .count();
+            assert!(
+                in_window <= PROVIDER_RPM,
+                "в окне с {i} оказалось {in_window} отправок при потолке {PROVIDER_RPM}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_send_leaving_the_window_frees_a_slot() {
+        let start = Instant::now();
+        let mut q = VecDeque::new();
+        for i in 0..PROVIDER_RPM {
+            assert!(admit(&mut q, start + Duration::from_millis(i as u64)));
+        }
+        // Потолок выбран — не пускаем.
+        assert!(!admit(&mut q, start + Duration::from_millis(PROVIDER_RPM as u64)));
+        // Самая старая вышла из окна — место освободилось, ровно одно.
+        let later = start + WINDOW;
+        assert!(admit(&mut q, later));
+        assert!(!admit(&mut q, later));
+    }
 }
