@@ -398,6 +398,16 @@ pub async fn patch(
             if target.eq_ignore_ascii_case(&id) {
                 return oops(StatusCode::BAD_REQUEST, "a ticket cannot wait for itself");
             }
+            if would_cycle(&tx, &id, target).await {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!(
+                        "{target} already waits for {id}, directly or through others: \
+                         this would close a ring, and nothing in a ring can ever be unblocked"
+                    )})),
+                )
+                    .into_response();
+            }
             match tx
                 .execute(
                     "insert into deps (ticket_id, depends_on)
@@ -433,6 +443,16 @@ pub async fn patch(
             if sign == "+" {
                 if target.eq_ignore_ascii_case(&id) {
                     return oops(StatusCode::BAD_REQUEST, "a ticket cannot wait for itself");
+                }
+                if would_cycle(&tx, &id, target).await {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": format!(
+                            "{target} already waits for {id}, directly or through others: \
+                             this would close a ring, and nothing in a ring can ever be unblocked"
+                        )})),
+                    )
+                        .into_response();
                 }
                 // Вставка идёт SELECT-ом по существующему тикету: если цели
                 // нет, строк будет ноль, и мы скажем об этом вместо того,
@@ -2166,6 +2186,40 @@ mod explain_tests {
     fn an_unknown_error_is_not_guessed() {
         assert!(explain_constraint("connection reset by peer").is_none());
     }
+}
+
+/// Появится ли цикл, если `ticket` начнёт ждать `target`.
+///
+/// Прямую самоссылку ловит сравнение идентификаторов, и её мало: A ждёт B, B
+/// ждёт A — обе правки по отдельности законны, а вместе дают кольцо. Пришло
+/// снаружи именно так: «тикет числится в собственных up и down». Прямой
+/// самоссылки в базе и правда не было — до себя он доходил ЧЕРЕЗ цикл, и
+/// выдача зависимостей честно его показывала.
+///
+/// Цена кольца не в некрасивой выдаче. Тикет в цикле не может быть
+/// разблокирован никогда: каждый ждёт того, кто ждёт его. Очередь такой тикет
+/// не выдаст, а почему — не скажет.
+///
+/// Идём ВВЕРХ от цели: если от неё по рёбрам «ждёт» достижим сам тикет, ребро
+/// замкнёт кольцо. `cycle` в SQL обязателен — без него кольцо, уже стоящее в
+/// базе, увело бы обход в бесконечность.
+async fn would_cycle(
+    tx: &deadpool_postgres::Transaction<'_>,
+    ticket: &str,
+    target: &str,
+) -> bool {
+    let row = tx
+        .query_opt(
+            "with recursive up as (
+               select depends_on as id from deps where lower(ticket_id) = lower($2)
+               union
+               select d.depends_on from deps d join up on lower(d.ticket_id) = lower(up.id)
+             )
+             select 1 from up where lower(id) = lower($1) limit 1",
+            &[&ticket, &target],
+        )
+        .await;
+    matches!(row, Ok(Some(_)))
 }
 
 /// Пределы длины из таблицы `write_limits`.

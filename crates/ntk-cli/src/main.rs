@@ -1018,7 +1018,13 @@ async fn deps(id: String, workspace: Option<String>, up_only: bool, down_only: b
         println!("waits for:");
         for v in &up { println!("  {}", line(v)); }
     }
-    println!("{}", line(&tree));
+    // Сам тикет подписан, и это не украшение.
+    //
+    // Он печатался посередине голой строкой, без отступа и без пометки, — и
+    // читался как ещё одна запись в обоих списках. Пришло снаружи ровно так:
+    // «тикет числится в собственных up и down, такого быть не должно». Данные
+    // были целы, самоссылки в базе нет и не было; неверной была выдача.
+    println!("{}  <- this ticket", line(&tree));
     let down = if show_down { side("down") } else { Vec::new() };
     if !down.is_empty() {
         println!("waited on by:");

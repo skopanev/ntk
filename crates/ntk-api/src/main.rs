@@ -108,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
         // уметь обновиться, а номер версии секретом не является.
         .route("/v1/version", get(release::current))
         .route("/v1/download", get(release::download))
+        // Установка одной строкой. Платформу определяет СКРИПТ по uname, а не
+        // сервер по догадке: обязательность platform на соседних ручках стоит
+        // именно затем, чтобы никто не угадывал.
+        .route("/v1/install.sh", get(release::install_sh))
         .route("/v1/me", get(whoami))
         .route("/v1/tickets", get(tickets).post(write::create))
         // POST, а не GET: текст тикета доходит до двух тысяч символов, и в
