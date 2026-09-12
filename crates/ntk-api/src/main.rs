@@ -574,7 +574,8 @@ pub(crate) async fn tickets(
         "select id, uuid::text, title, status, priority, type, assignee,
                 project_id, module, tags, body,
                 created_at::text, updated_at::text,
-                started_at::text, closed_at::text, current_status_at::text"
+                started_at::text, closed_at::text, current_status_at::text,
+                due::text"
     };
     let mut sql = format!("{head} from tickets where deleted_at is null");
     let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -673,7 +674,7 @@ pub(crate) async fn tickets(
                     module: r.get(8),
                     tags: r.get(9),
                     deps: Vec::new(),
-                    due: None,
+                    due: r.get(16),
                     body: r.get(10),
                     created_at: r.get(11),
                     updated_at: r.get(12),
@@ -683,6 +684,44 @@ pub(crate) async fn tickets(
                 })
                 .collect::<Vec<_>>()
         });
+
+    // Зависимости добираются ОДНИМ запросом на всю страницу, а не по тикету.
+    //
+    // Раньше список отдавал `deps: []` всем подряд: таблицу связей он не читал
+    // вовсе, а поле сериализовалось всегда. Пустой массив — не «не спрашивали»,
+    // а утверждение «зависимостей нет», и читавший список видел развязанную
+    // очередь там, где рёбра на месте. Проверено на паре: show отдавал ребро,
+    // ls по тому же тикету — пустоту. То же было с `due`: колонка в таблице
+    // есть, в выборку не попадала, наружу уходил null.
+    let out = match out {
+        Err(e) => Err(e),
+        Ok(mut tickets) => {
+            let ids: Vec<String> = tickets.iter().map(|t| t.id.clone()).collect();
+            match tx
+                .query(
+                    "select ticket_id, depends_on from deps
+                      where ticket_id = any($1) order by depends_on",
+                    &[&ids],
+                )
+                .await
+            {
+                Ok(rows) => {
+                    let mut by_id: std::collections::HashMap<String, Vec<String>> =
+                        std::collections::HashMap::new();
+                    for r in &rows {
+                        by_id.entry(r.get(0)).or_default().push(r.get(1));
+                    }
+                    for t in &mut tickets {
+                        if let Some(d) = by_id.remove(&t.id) {
+                            t.deps = d;
+                        }
+                    }
+                    Ok(tickets)
+                }
+                Err(e) => Err(e),
+            }
+        }
+    };
 
     match out {
         Ok(tickets) => (StatusCode::OK, Json(json!({"tickets": tickets}))).into_response(),
