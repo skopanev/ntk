@@ -1928,7 +1928,15 @@ pub async fn patch_project(
 
     if p.archived {
         let left: i64 = match tx
-            .query_one("select count(*) from tickets where project_id = $1", &[&project])
+            // Удалённые не в счёт. Убрать проект из выбора — не разрушение:
+            // заведённые тикеты остаются на месте и остаются видимыми, заслон
+            // здесь стоит против исчезновения ЖИВОЙ работы. Удалённый тикет
+            // живой работой не является, и пока он считался, проект с
+            // полностью удалёнными тикетами нельзя было убрать никогда.
+            .query_one(
+                "select count(*) from tickets where project_id = $1 and deleted_at is null",
+                &[&project],
+            )
             .await
         {
             Ok(r) => r.get(0),
