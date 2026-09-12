@@ -185,6 +185,8 @@ enum Cmd {
         add: bool,
         #[arg(long, help = "Read the list from standard input. Spelled out on purpose, so that replacing a set never happens by oversight.")]
         stdin: bool,
+        #[arg(long = "include-archived", help = ntk_core::tools::arg("ntk_modules", "include_archived"))]
+        include_archived: bool,
         #[arg(long, help = "Print JSON instead of a table.")]
         json: bool,
     },
@@ -194,6 +196,12 @@ enum Cmd {
     /// ticket identifier, and those are primary keys. "Rename" here means moving
     /// the tickets and retiring the emptied name — two steps.
     Projects {
+        /// Register a NEW project. Naming an unregistered project on a ticket is refused: that is how near-duplicates appear.
+        #[arg(long)]
+        add: Option<String>,
+        /// Register a name that differs from an existing one only in punctuation or case. Only when they really are different projects.
+        #[arg(long)]
+        force: bool,
         /// Retire an emptied project from the choices. A project that still has tickets is not retired.
         #[arg(long)]
         archive: Option<String>,
@@ -285,8 +293,8 @@ async fn main() -> Result<()> {
             let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale: None };
             walk(ws, f, reset, json).await
         }
-        Cmd::Projects { archive, unarchive, move_from, to, json } =>
-            projects(ws, archive, unarchive, move_from, to, json).await,
+        Cmd::Projects { add, force, archive, unarchive, move_from, to, json } =>
+            projects(ws, add, force, archive, unarchive, move_from, to, json).await,
         Cmd::Show { id, json } => show(id, ws, json).await,
         Cmd::Next { prefer, tag, strict, project, module, has_module, assignee, dry_run, json } =>
             next(ws, prefer, tag, strict, project, module, has_module, assignee, dry_run, json).await,
@@ -298,8 +306,8 @@ async fn main() -> Result<()> {
         Cmd::Start { id } => start(id, ws).await,
         Cmd::Deps { id, up, down, json } => deps(id, ws, up, down, json).await,
         Cmd::Rm { id, yes } => rm(id, ws, yes).await,
-        Cmd::Modules { project, replace, add, stdin, json } =>
-            modules(ws, project, replace, add, stdin, json).await,
+        Cmd::Modules { project, replace, add, stdin, include_archived, json } =>
+            modules(ws, project, replace, add, stdin, include_archived, json).await,
         Cmd::Find { text, body, id, status, tag, strict, assignee, project, module, limit, min_score, json } =>
             find(ws, text, body, id,
                  api::Filters { status, tag, title: None, assignee, project, module, strict, all: true, stale: None },
@@ -1251,6 +1259,7 @@ async fn modules(
     replace: bool,
     add: bool,
     stdin: bool,
+    include_archived: bool,
     json: bool,
 ) -> Result<()> {
     let cfg = config::load()?;
@@ -1348,6 +1357,11 @@ async fn modules(
             None => true,
             Some(p) => x.get("project").and_then(|v| v.as_str()) == Some(p),
         })
+        // Архивный модуль выбрать нельзя, поэтому по умолчанию его и нет в
+        // списке: перечень, половина которого не годится, читается как выбор.
+        .filter(|x| {
+            include_archived || !x.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)
+        })
         .collect();
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -1411,6 +1425,8 @@ mod describe_tests {
 /// возможности остановиться между ними и посмотреть, что получилось.
 async fn projects(
     workspace: Option<String>,
+    add: Option<String>,
+    force: bool,
     archive: Option<String>,
     unarchive: Option<String>,
     move_from: Option<String>,
@@ -1424,12 +1440,22 @@ async fn projects(
         .context("no workspace given: pass -W, or set workspace in .ntkrc")?;
     let c = api::Client::new(&cfg.url);
 
-    let asked = [archive.is_some(), unarchive.is_some(), move_from.is_some()]
+    let asked = [add.is_some(), archive.is_some(), unarchive.is_some(), move_from.is_some()]
         .iter()
         .filter(|x| **x)
         .count();
     if asked > 1 {
-        anyhow::bail!("one action at a time: --archive, --unarchive or --move");
+        anyhow::bail!("one action at a time: --add, --archive, --unarchive or --move");
+    }
+
+    if let Some(id) = add {
+        let v = c.create_project(&key, &ws, &id, force).await?;
+        if json {
+            println!("{v}");
+        } else {
+            println!("{id} is registered and can be named on tickets");
+        }
+        return Ok(());
     }
 
     if let Some(from) = move_from {

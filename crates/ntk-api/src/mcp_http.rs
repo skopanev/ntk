@@ -389,8 +389,15 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                 return (ok, text);
             }
             let want = s(args, "project");
+            let with_archived =
+                args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(false);
             match serde_json::from_str::<Value>(&text) {
                 Ok(v) => {
+                    // Ответ ужимается сознательно. Прежде каждая строка несла
+                    // "project" и "archived" — при запросе по одному проекту
+                    // первое повторяет вопрос, второе на живом справочнике
+                    // всегда false. На 86 модулях это 9245 байт против 3655:
+                    // почти две трети ответа не несли ничего.
                     let rows: Vec<Value> = v
                         .get("modules")
                         .and_then(|m| m.as_array())
@@ -400,7 +407,30 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
                                     None => true,
                                     Some(p) => x.get("project").and_then(|v| v.as_str()) == Some(p),
                                 })
-                                .cloned()
+                                .filter(|x| {
+                                    with_archived
+                                        || !x.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)
+                                })
+                                .map(|x| {
+                                    let archived =
+                                        x.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let name = x.get("name").cloned().unwrap_or(Value::Null);
+                                    // Одно имя строкой, пока к нему нечего добавить.
+                                    if want.is_some() && !archived {
+                                        return name;
+                                    }
+                                    let mut o = serde_json::Map::new();
+                                    if want.is_none() {
+                                        if let Some(pr) = x.get("project") {
+                                            o.insert("project".into(), pr.clone());
+                                        }
+                                    }
+                                    o.insert("name".into(), name);
+                                    if archived {
+                                        o.insert("archived".into(), Value::Bool(true));
+                                    }
+                                    Value::Object(o)
+                                })
                                 .collect()
                         })
                         .unwrap_or_default();

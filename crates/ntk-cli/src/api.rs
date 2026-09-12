@@ -524,6 +524,27 @@ impl Client {
 
 
     /// Замена списка модулей проекта целиком.
+    /// Завести проект. Отдельным действием: молчаливое заведение по упоминанию
+    /// уже стоило справочнику двойников.
+    pub async fn create_project(
+        &self, key: &str, workspace: &str, project: &str, force: bool,
+    ) -> Result<serde_json::Value> {
+        let r = self
+            .http
+            .post(format!("{}/v1/projects/{}", self.base, urlencode(project)))
+            .bearer_auth(key)
+            .json(&serde_json::json!({ "workspace": workspace, "force": force }))
+            .send()
+            .await
+            .context("the service is unavailable")?;
+        let code = r.status();
+        let v: serde_json::Value = r.json().await.context("the service response did not parse")?;
+        if !code.is_success() {
+            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or(code.as_str()));
+        }
+        Ok(v)
+    }
+
     /// Убрать проект из выбора или вернуть в него.
     pub async fn set_project_archived(
         &self, key: &str, workspace: &str, project: &str, archived: bool,

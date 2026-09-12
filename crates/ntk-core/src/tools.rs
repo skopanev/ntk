@@ -465,11 +465,15 @@ pub const ALL: &[Tool] = &[
         cli: "modules",
         title: "Project modules",
         about: "Project modules.",
-        desc: "Project modules. Shows both live and archived ones: an archived module stays visible but cannot be chosen for new work.",
+        desc: "Project modules, live ones only. An archived module cannot be chosen for new work, so it is left out by default; ask for include_archived when you need to know a name is taken rather than free.",
         read_only: true,
         destructive: false,
         idempotent: true,
-        fields: &[WS, Field::opt("project", Ty::Str, "Only this project's modules. Without it — all of them.")],
+        fields: &[
+            WS,
+            Field::opt("project", Ty::Str, "Only this project's modules. Without it — all of them, and each name then carries the project it belongs to."),
+            Field::opt("include_archived", Ty::Bool, "Also list archived modules, each marked archived. Off by default: they cannot be chosen, so listing them only spends context."),
+        ],
     },
     Tool {
         name: "ntk_modules_add",

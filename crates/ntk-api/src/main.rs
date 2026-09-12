@@ -130,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
         // Жизненный цикл проекта: убрать опустевшее имя из выбора и
         // перенести тикеты целиком. Переименования нет намеренно —
         // id проекта сидит префиксом в первичных ключах тикетов.
-        .route("/v1/projects/{id}", patch(write::patch_project))
+        .route("/v1/projects/{id}", patch(write::patch_project).post(write::create_project))
         .route("/v1/projects/{id}/move", post(write::move_project))
         // Вход без передачи ключа из рук в руки: устройство берёт код,
         // человек проходит Google, устройство забирает ключ.

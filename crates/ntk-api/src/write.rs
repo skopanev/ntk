@@ -538,12 +538,8 @@ pub async fn patch(
     }
 
     if let Some(proj) = p.project.as_deref() {
-        if tx
-            .execute("insert into projects (id, name) values ($1, $1) on conflict (id) do nothing", &[&proj])
-            .await
-            .is_err()
-        {
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        if let Err(r) = known_project(&tx, proj).await {
+            return r;
         }
     }
 
@@ -1099,12 +1095,8 @@ pub async fn create(
     // Проект заводится по ходу: справочник наполняется теми проектами, которые
     // реально встречаются, а не отдельным обрядом заведения.
     if let Some(proj) = p.project.as_deref() {
-        if tx
-            .execute("insert into projects (id, name) values ($1, $1) on conflict (id) do nothing", &[&proj])
-            .await
-            .is_err()
-        {
-            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        if let Err(r) = known_project(&tx, proj).await {
+            return r;
         }
     }
 
@@ -1715,6 +1707,56 @@ pub(crate) fn modules_missing_in_target(source: &[String], target: &[String]) ->
 /// содержится в нём, а имелся в виду именно он. Поэтому расстояние
 /// редактирования, а не вхождение — пропущенная, лишняя или переставленная
 /// буква остаётся в пределах двух правок.
+/// Проект должен УЖЕ существовать. Раньше здесь стояло
+/// `insert into projects … on conflict do nothing`: справочник наполнялся
+/// теми именами, что встречались, и опечатка становилась проектом молча.
+///
+/// Так и вышло на деле: в одном воркспейсе три проекта из семи оказались
+/// двойниками — где написание разошлось на один дефис, где то же самое
+/// хранилище завели под вторым именем. Работа по одному коду разъехалась по
+/// двум спискам. Незнакомый МОДУЛЬ при этом отвергался с подсказкой: строгой
+/// была безобидная половина, а вредная — свободной.
+///
+/// Заводится проект теперь отдельным действием: `ntk projects --add`.
+pub(crate) async fn known_project(
+    tx: &tokio_postgres::Transaction<'_>,
+    proj: &str,
+) -> Result<(), Response> {
+    let known: Vec<String> = match tx.query("select id from projects", &[]).await {
+        Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+        Err(_) => return Err(oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
+    };
+    if known.iter().any(|k| k == proj) {
+        return Ok(());
+    }
+    let near = near_misses(proj, &known);
+    let hint = if near.is_empty() {
+        format!("The live ones: {}.", known.join(", "))
+    } else {
+        format!("Did you mean: {}?", near.join(", "))
+    };
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": format!(
+                "unknown project \"{proj}\". {hint} A project is not created by naming it:                  that is how near-duplicates appear and split one codebase across two lists.                  Register a genuinely new one with `ntk projects --add {proj}`."
+            ),
+            "unknown_project": proj,
+            "near": near,
+        })),
+    )
+        .into_response())
+}
+
+/// Имена, различимые только знаками препинания или регистром, — это одно имя
+/// для человека и два для базы. Такая пара прожила в боевом справочнике месяц.
+pub(crate) fn same_name_really(a: &str, b: &str) -> bool {
+    let fold = |s: &str| -> String {
+        s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+    };
+    fold(a) == fold(b)
+}
+
 pub(crate) fn near_misses(asked: &str, known: &[String]) -> Vec<String> {
     let mut near: Vec<(usize, String)> = known
         .iter()
@@ -1766,6 +1808,81 @@ pub(crate) fn absent_from(asked: &[String], known: &[String]) -> Vec<String> {
     miss.sort();
     miss.dedup();
     miss
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectNew {
+    workspace: Option<String>,
+    /// Завести имя, похожее на уже занятое. Только осознанно.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Завести проект — отдельным действием и только руками.
+///
+/// Отдельным потому, что молчаливое заведение по упоминанию уже стоило нам трёх
+/// двойников из семи проектов. Руками потому, что ошибается тут не человек, а
+/// агент: он пишет имя по памяти, промахивается на дефис и получает второй
+/// список вместо отказа.
+pub async fn create_project(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Path(project): Path<String>,
+    Json(p): Json<ProjectNew>,
+) -> Response {
+    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tx = match db::begin(&mut client, &ws).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+    };
+
+    let known: Vec<String> = match tx.query("select id from projects", &[]).await {
+        Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+    };
+    if known.iter().any(|k| k == &project) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": format!("project {project} already exists")})),
+        )
+            .into_response();
+    }
+
+    // Двойник по написанию отвергается ДО записи. Дефис, точка, регистр — для
+    // человека это одно имя, для первичного ключа два, и расходятся они молча.
+    if !p.force {
+        let twins: Vec<String> =
+            known.iter().filter(|k| same_name_really(k, &project)).cloned().collect();
+        if !twins.is_empty() {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "\"{project}\" differs from {} only in punctuation or case — that is one name to a person and two to the database. Use the existing one, or pass force if they really are different projects.",
+                        twins.join(", ")
+                    ),
+                    "twins": twins,
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    if tx
+        .execute("insert into projects (id, name) values ($1, $1)", &[&project])
+        .await
+        .is_err()
+    {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    }
+    if tx.commit().await.is_err() {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    }
+    Json(json!({ "project": project, "created": true })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1893,15 +2010,8 @@ pub async fn move_project(
     {
         return oops(StatusCode::NOT_FOUND, "no such project");
     }
-    if tx
-        .execute(
-            "insert into projects (id, name) values ($1, $1) on conflict (id) do nothing",
-            &[&to],
-        )
-        .await
-        .is_err()
-    {
-        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    if let Err(r) = known_project(&tx, &to).await {
+        return r;
     }
 
     // Модули считаем ДО записи: иначе внешний ключ на пару отвергнет перенос
@@ -2644,5 +2754,29 @@ mod embed_input_tests {
     #[test]
     fn a_change_inside_the_clip_changes_the_sha() {
         assert_ne!(embed_sha(&embed_input("t", "один")), embed_sha(&embed_input("t", "два")));
+    }
+}
+
+#[cfg(test)]
+mod twin_name_tests {
+    use super::same_name_really;
+
+    // Пара, которая месяц прожила в боевом справочнике как два проекта:
+    // различие ровно в одном дефисе. Ради этого случая правило и написано.
+    #[test]
+    fn punctuation_alone_is_not_a_difference() {
+        assert!(same_name_really("core-infra", "coreinfra"));
+        assert!(same_name_really("core_infra", "core.infra"));
+        assert!(same_name_really("CoreInfra", "core-infra"));
+    }
+
+    // Обратная половина важнее: заслон, отвергающий разные имена, выключат.
+    #[test]
+    fn different_names_stay_different() {
+        assert!(!same_name_really("backend", "frontend"));
+        assert!(!same_name_really("api", "api2"));
+        // Второе имя того же репозитория правилом НЕ ловится, и это честно:
+        // строкового сходства здесь нет, ловить нечем.
+        assert!(!same_name_really("bkd", "core-backend"));
     }
 }
