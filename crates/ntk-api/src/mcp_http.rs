@@ -375,6 +375,31 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             }
         }
 
+        // Перенос проекта. В MCP операций с проектами не было ВООБЩЕ: семнадцать
+        // инструментов, и ни один их не касается. Через терминал слить два
+        // разошедшихся имени можно было, через MCP — нет, и оставалась только
+        // череда правок по одному тикету, то есть полсотни окон, в каждом из
+        // которых набор остаётся разорванным между двумя проектами.
+        //
+        // Своей логики переноса здесь нет: ручка на сервисе уже делает это
+        // одной транзакцией и заранее проверяет модули. Наружу выставляется
+        // она же.
+        "ntk_project_move" => {
+            let Some(from) = s(args, "from") else {
+                return (false, "no from given".into());
+            };
+            let Some(to) = s(args, "to") else {
+                return (false, "no to given".into());
+            };
+            let body = json!({ "workspace": ws.clone().unwrap_or_default(), "to": to });
+            match serde_json::from_value(body) {
+                Ok(parsed) => {
+                    body_text(write::move_project(st, h, Path(from), Json(parsed)).await).await
+                }
+                Err(e) => (false, e.to_string()),
+            }
+        }
+
         // Modules. Over HTTP these did not exist at all: the registry was
         // there, the local client used it, and through the web client there was
         // no way to name a module — with no way to understand why "the same

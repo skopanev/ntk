@@ -96,6 +96,17 @@ pub struct ModulesArgs {
     pub workspace: String,
     // Проект. Без него — модули всех проектов воркспейса.
     pub project: Option<String>,
+    // Архивные тоже. По умолчанию их нет: выбрать такой модуль нельзя.
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectMoveArgs {
+    pub workspace: String,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -582,14 +593,49 @@ impl Ntk {
         let (c, key) = Self::client().await?;
         let v = c.meta(&key, &a.workspace).await.map_err(oops)?;
         let all = v.get("modules").and_then(|m| m.as_array()).cloned().unwrap_or_default();
-        let rows: Vec<&serde_json::Value> = all
+        // Та же выдача, что у поверхности по HTTP. Разойдись они — «одно и то
+        // же» отвечало бы по-разному в двух местах, и узнать об этом можно
+        // было бы только случайно.
+        let rows: Vec<serde_json::Value> = all
             .iter()
             .filter(|x| match a.project.as_deref() {
                 None => true,
                 Some(p) => x.get("project").and_then(|v| v.as_str()) == Some(p),
             })
+            .filter(|x| {
+                a.include_archived
+                    || !x.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)
+            })
+            .map(|x| {
+                let archived = x.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+                let name = x.get("name").cloned().unwrap_or(serde_json::Value::Null);
+                if a.project.is_some() && !archived {
+                    return name;
+                }
+                let mut o = serde_json::Map::new();
+                if a.project.is_none() {
+                    if let Some(pr) = x.get("project") {
+                        o.insert("project".into(), pr.clone());
+                    }
+                }
+                o.insert("name".into(), name);
+                if archived {
+                    o.insert("archived".into(), serde_json::Value::Bool(true));
+                }
+                serde_json::Value::Object(o)
+            })
             .collect();
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&rows).map_err(oops)?)]))
+    }
+
+    #[tool]
+    async fn ntk_project_move(&self, Parameters(a): Parameters<ProjectMoveArgs>) -> Result<CallToolResult, McpError> {
+        if a.from == a.to {
+            return Err(oops("moving into the same project means nothing"));
+        }
+        let (c, key) = Self::client().await?;
+        let v = c.move_project(&key, &a.workspace, &a.from, &a.to).await.map_err(oops)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&v).map_err(oops)?)]))
     }
 
     #[tool]

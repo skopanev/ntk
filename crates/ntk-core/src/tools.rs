@@ -461,6 +461,21 @@ pub const ALL: &[Tool] = &[
         ],
     },
     Tool {
+        name: "ntk_project_move",
+        cli: "projects",
+        title: "Move a project's tickets",
+        about: "Move every ticket of one project into another, in one transaction.",
+        desc: "Move EVERY ticket of one project into another, in a single transaction: either all of them arrive or none do. Take this when two project names turned out to be the same thing — a spelling that drifted, or a second name for one repository — and the work has to end up in one list. Changing the project on tickets one at a time is a different operation: on fifty tickets that is fifty windows in which the set can be left split across both names. Two things do NOT change, and both matter. Identifiers keep the OLD prefix: a ticket filed under the old name still reads that way, and nothing about that is broken. And a module must already be registered in the target for every module the moved tickets reference — otherwise the move is refused up front, naming the missing ones, rather than failing halfway. Retiring the emptied name is a separate step on purpose: moving and retiring in one act would hide which of the two failed.",
+        read_only: false,
+        destructive: true,
+        idempotent: false,
+        fields: &[
+            WS,
+            Field::req("from", Ty::Str, "The project to empty. It must exist."),
+            Field::req("to", Ty::Str, "The project that receives the tickets. It must exist, and it must already carry every module the moved tickets reference."),
+        ],
+    },
+    Tool {
         name: "ntk_modules",
         cli: "modules",
         title: "Project modules",

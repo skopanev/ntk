@@ -2057,6 +2057,23 @@ pub async fn move_project(
             .into_response();
     }
 
+    // Удалённые считаются ОТДЕЛЬНО, а не подмешиваются в общее число.
+    //
+    // Иначе отчёт о переносе не сходится с тем, что человек видит в списках:
+    // на этом уже разошлись «53 тикета» в обзоре проектов и «52» в разбивке по
+    // статусам — разницей была одна удалённая строка. Переезжают все строки,
+    // включая удалённую: она принадлежит той же работе и должна ехать с ней.
+    // Но названы они порознь.
+    let live: i64 = match tx
+        .query_one(
+            "select count(*) from tickets where project_id = $1 and deleted_at is null",
+            &[&from],
+        )
+        .await
+    {
+        Ok(r) => r.get(0),
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+    };
     let moved = match tx
         .execute("update tickets set project_id = $2 where project_id = $1", &[&from, &to])
         .await
@@ -2067,7 +2084,14 @@ pub async fn move_project(
     if tx.commit().await.is_err() {
         return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
-    Json(json!({ "from": from, "to": to, "moved": moved })).into_response()
+    Json(json!({
+        "from": from,
+        "to": to,
+        "moved": moved,
+        "live": live,
+        "deleted": moved as i64 - live,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
