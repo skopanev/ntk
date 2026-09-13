@@ -208,7 +208,14 @@ pub(crate) async fn whoami(State(app): State<Arc<App>>, headers: HeaderMap) -> R
     }
 }
 
+/// Неизвестный параметр — ОТКАЗ, а не тишина.
+///
+/// Проверено на живом сервисе: клиент новее сервиса послал `date=`, тот его не
+/// знал и молча вернул всё. Счёт совпал до тикета — 29 и с невозможной датой, и
+/// с полной бессмыслицей. Отбор, который никого не отсеял, читается как «столько
+/// и есть», и узнать правду неоткуда. Пусть лучше ругается.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TicketsQuery {
     workspace: Option<String>,
     status: Option<String>,
@@ -220,6 +227,9 @@ struct TicketsQuery {
     limit: i64,
     #[serde(default)]
     offset: i64,
+    /// Отбор по датам: `created_at:gte:2026-09-01,created_at:lte:2026-09-12`.
+    /// Через запятую, сколько угодно выражений и по разным полям сразу.
+    date: Option<String>,
     /// Отбор по тегам через запятую. Все перечисленные должны быть на тикете:
     /// «и», а не «или».
     tag: Option<String>,
@@ -630,6 +640,14 @@ pub(crate) async fn tickets(
     // i64 уходит как int8 и валится «error serializing parameter» — отказом,
     // в котором про типы не сказано ни слова. Потолок в сто лет — чтобы
     // приведение не могло обрезать значение молча.
+    // Даты — из общего модуля, не своим куском. Список уже однажды отбирал по
+    // статусам мимо него, и «то же самое» в ls и walk значило разное.
+    let dates = match crate::filter::parse_dates(q.date.as_deref()) {
+        Ok(d) => d,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
+    crate::filter::apply_dates(&mut sql, &mut args, &dates);
+
     let stale: Option<i32> = q.stale.filter(|d| *d > 0).map(|d| d.min(36_500) as i32);
     if stale.is_some() {
         args.push(&stale);

@@ -18,6 +18,8 @@ pub struct Filters {
     pub all: bool,
     /// Только те, что стоят в текущем статусе дольше N дней.
     pub stale: Option<i64>,
+    /// Отбор по датам: `created_at:gte:2026-09-01,created_at:lte:2026-09-12`.
+    pub date: Option<String>,
 }
 
 pub struct Client {
@@ -67,6 +69,7 @@ fn filter_query(f: &Filters) -> Vec<(&'static str, String)> {
     if f.strict { q.push(("strict", "true".to_string())); }
     if f.all { q.push(("all", "true".to_string())); }
     if let Some(d) = f.stale { q.push(("stale", d.to_string())); }
+    if let Some(v) = f.date.as_deref() { q.push(("date", v.to_string())); }
     q
 }
 
@@ -651,6 +654,7 @@ mod filter_query_tests {
             strict: true,
             all: true,
             stale: Some(7),
+            date: Some("created_at:gte:2026-09-01".into()),
         }
     }
 
@@ -661,7 +665,7 @@ mod filter_query_tests {
     #[test]
     fn every_filter_reaches_the_query() {
         let q = filter_query(&full());
-        for want in ["status", "tag", "title", "assignee", "project", "module", "strict", "all", "stale"] {
+        for want in ["status", "tag", "title", "assignee", "project", "module", "strict", "all", "stale", "date"] {
             assert!(q.iter().any(|(k, _)| *k == want), "потерян отбор {want}: {q:?}");
         }
     }
@@ -677,7 +681,7 @@ mod filter_query_tests {
     fn empty_filters_add_nothing() {
         let q = filter_query(&Filters {
             status: None, tag: None, title: None, assignee: None,
-            project: None, module: None, strict: false, all: false, stale: None,
+            project: None, module: None, strict: false, all: false, stale: None, date: None,
         });
         assert!(q.is_empty(), "пустой отбор не должен ничего добавлять: {q:?}");
     }

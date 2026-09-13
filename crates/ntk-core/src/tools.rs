@@ -63,6 +63,10 @@ impl Field {
     }
 }
 
+/// The date filter, worded once and shared: `ls`, `walk` and `find` must not
+/// explain the same syntax three different ways.
+const DATE_DESC: &str = "Filter by date, as a comma-separated list of field:op:value — for example \"created_at:gte:2026-09-01,created_at:lte:2026-09-12\" for everything filed in that span, ends INCLUDED. Both bounds in one call, and different fields in one call too: \"created_at:gte:2026-08-01,closed_at:lte:2026-09-01\". Fields: created_at, updated_at, started_at, closed_at, due. Operators: gte (not earlier than) and lte (not later than). Value is ISO: a plain day 2026-09-12, or a moment 2026-09-12T14:35:00 (seconds optional, a trailing Z allowed). A plain DAY covers the whole of it — lte:2026-09-12 reaches that day's end rather than stopping at its midnight — while a moment is compared exactly. Moments are UTC. due holds a day rather than a moment, so a time on it is refused. A field or operator that is not on these lists is refused rather than ignored: a silently dropped condition would widen the answer without saying so. Naming a nullable field narrows to tickets that have it — closed_at:lte:… returns closed tickets only.";
+
 #[derive(Debug, Clone, Copy)]
 pub struct Tool {
     /// The MCP name: `ntk_create`.
@@ -254,6 +258,7 @@ pub const ALL: &[Tool] = &[
             ASSIGNEE_PICK,
             PROJECT_PICK,
             MODULE_PICK,
+            Field::opt("date", Ty::Str, DATE_DESC),
             Field::opt("stale", Ty::Int, "Only tickets that have been sitting in their CURRENT status longer than this many days. Answers the one question nothing could answer before: which work was abandoned — a container died, an agent never came back, and the ticket stayed in in_progress. Counted from the moment of the last status change, not from the last edit: fixing a typo yesterday must not make a ticket look freshly taken."),
             Field::opt("count", Ty::Bool, "Return only the NUMBER of matches. The 500-row output cap does not limit the count: the database counts it."),
         ],
@@ -278,6 +283,7 @@ pub const ALL: &[Tool] = &[
             PROJECT_PICK,
             MODULE_PICK,
             ALL_ONES,
+            Field::opt("date", Ty::Str, DATE_DESC),
             Field::opt("reset", Ty::Bool, "Forget what was shown and start over."),
         ],
     },
@@ -457,6 +463,7 @@ pub const ALL: &[Tool] = &[
             PROJECT_PICK,
             MODULE_PICK,
             Field::opt("limit", Ty::Int, "How many to return. 10 by default, 20 at most."),
+            Field::opt("date", Ty::Str, DATE_DESC),
             Field::opt("min_score", Ty::Num, "Closeness cut-off between 0 and 1. Omit it and the workspace policy decides — there is no fixed number here, because the right one depends on the corpus. Measured on a live workspace of 4179 tickets: lowering the bar does NOT simply find more duplicates, because the distributions overlap — a reworded duplicate scored 0.639 while unrelated work in the same area scored 0.677. Pass a low value to see the tail and judge for yourself; pass a high one to see near-copies only. Passing it here costs nothing and changes nothing — the workspace default is a separate decision, made from measurements across the whole corpus, and it is not to be moved because one search surprised you."),
         ],
     },

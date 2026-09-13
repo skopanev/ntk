@@ -23,7 +23,9 @@ use serde_json::json;
 
 use crate::{auth, db, filter, App};
 
+/// Неизвестный параметр — отказ, по той же причине, что и у списка.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WalkQuery {
     workspace: Option<String>,
     /// The session identifier. Invented by the CLIENT.
@@ -53,6 +55,8 @@ pub struct WalkQuery {
     module: Option<String>,
     #[serde(default)]
     all: bool,
+    /// Отбор по датам: `created_at:gte:2026-09-01,created_at:lte:2026-09-12`.
+    date: Option<String>,
 }
 
 impl WalkQuery {
@@ -65,6 +69,7 @@ impl WalkQuery {
             title: self.title.clone(),
             assignee: self.assignee.clone(),
             project: self.project.clone(),
+            date: self.date.clone(),
             all: self.all,
         }
     }
@@ -163,7 +168,10 @@ pub async fn step(
         }
     };
 
-    let bound = f.bind(&actor.user_id);
+    let bound = match f.bind(&actor.user_id) {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
     let tx = match db::begin(&mut client, &ws).await {
         Ok(t) => t,
         Err(e) => {

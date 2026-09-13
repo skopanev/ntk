@@ -41,6 +41,8 @@ enum Cmd {
         title: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_ls", "stale"))]
         stale: Option<i64>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_ls", "date"))]
+        date: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_ls", "count"))]
         count: bool,
         #[arg(short = 'n', long, default_value_t = 50, help = ntk_core::tools::arg("ntk_ls", "limit"))]
@@ -70,6 +72,8 @@ enum Cmd {
         project: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_walk", "all"))]
         all: bool,
+        #[arg(long, help = ntk_core::tools::arg("ntk_walk", "date"))]
+        date: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_walk", "reset"))]
         reset: bool,
         #[arg(long, help = "Print JSON instead of a table.")]
@@ -237,6 +241,8 @@ enum Cmd {
         project: Option<String>,
         #[arg(long, help = ntk_core::tools::arg("ntk_find", "module"))]
         module: Option<String>,
+        #[arg(long, help = ntk_core::tools::arg("ntk_find", "date"))]
+        date: Option<String>,
         #[arg(short = 'n', long, help = ntk_core::tools::arg("ntk_find", "limit"))]
         limit: Option<i64>,
         #[arg(long, help = ntk_core::tools::arg("ntk_find", "min_score"))]
@@ -285,12 +291,12 @@ async fn main() -> Result<()> {
     let ws = cli.workspace.clone();
     match cli.cmd {
         Cmd::Login => login().await,
-        Cmd::Ls { status, tag, strict, title, assignee, project, module, stale, count, limit, offset, all, json } => {
-            let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale };
+        Cmd::Ls { status, tag, strict, title, assignee, project, module, stale, date, count, limit, offset, all, json } => {
+            let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale, date };
             ls(ws, f, count, limit, offset, json).await
         }
-        Cmd::Walk { status, tag, strict, title, assignee, project, module, all, reset, json } => {
-            let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale: None };
+        Cmd::Walk { status, tag, strict, title, assignee, project, module, all, date, reset, json } => {
+            let f = api::Filters { status, tag, title, assignee, project, module, strict, all, stale: None, date };
             walk(ws, f, reset, json).await
         }
         Cmd::Projects { add, force, archive, unarchive, move_from, to, json } =>
@@ -308,9 +314,9 @@ async fn main() -> Result<()> {
         Cmd::Rm { id, yes } => rm(id, ws, yes).await,
         Cmd::Modules { project, replace, add, stdin, include_archived, json } =>
             modules(ws, project, replace, add, stdin, include_archived, json).await,
-        Cmd::Find { text, body, id, status, tag, strict, assignee, project, module, limit, min_score, json } =>
+        Cmd::Find { text, body, id, status, tag, strict, assignee, project, module, date, limit, min_score, json } =>
             find(ws, text, body, id,
-                 api::Filters { status, tag, title: None, assignee, project, module, strict, all: true, stale: None },
+                 api::Filters { status, tag, title: None, assignee, project, module, strict, all: true, stale: None, date },
                  limit, min_score, json).await,
         Cmd::Meta { json } => meta(ws, json).await,
         Cmd::Whoami => whoami().await,
@@ -1400,6 +1406,7 @@ mod describe_tests {
             strict: false,
             all: true,
             stale: None,
+            date: None,
         }
     }
 

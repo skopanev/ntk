@@ -190,7 +190,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             // dispatcher never forwarded it — so filtering by module was
             // SILENTLY ignored and everything came back. That is worse than a
             // refusal: a refusal is visible.
-            for k in ["assignee", "project", "module"] {
+            for k in ["assignee", "project", "module", "date"] {
                 if let Some(v) = s(args, k) { q.push(format!("{k}={}", urlencoding::encode(&v))); }
             }
             if args.get("strict").and_then(|v| v.as_bool()).unwrap_or(false) { q.push("strict=true".into()); }
@@ -235,7 +235,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             let mut q = vec![];
             if let Some(w) = &ws { q.push(format!("workspace={}", urlencoding::encode(w))); }
             if let Some(v) = s(args, "walk_id") { q.push(format!("walk_id={}", urlencoding::encode(&v))); }
-            for k in ["status", "tag", "title", "assignee", "project", "module"] {
+            for k in ["status", "tag", "title", "assignee", "project", "module", "date"] {
                 if let Some(v) = s(args, k) { q.push(format!("{k}={}", urlencoding::encode(&v))); }
             }
             for k in ["strict", "all", "reset"] {
@@ -355,7 +355,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             if let Some(w) = &ws {
                 q["workspace"] = json!(w);
             }
-            for k in ["text", "body", "id", "status", "tag", "assignee", "project", "module"] {
+            for k in ["text", "body", "id", "status", "tag", "assignee", "project", "module", "date"] {
                 if let Some(v) = s(args, k) {
                     q[k] = json!(v);
                 }

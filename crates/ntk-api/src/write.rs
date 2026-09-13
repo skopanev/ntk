@@ -765,6 +765,9 @@ pub struct SimilarQ {
     project: Option<String>,
     #[serde(default)]
     module: Option<String>,
+    /// Отбор по датам: `created_at:gte:2026-09-01,created_at:lte:2026-09-12`.
+    #[serde(default)]
+    date: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
     #[serde(default)]
@@ -888,11 +891,15 @@ pub async fn similar(
         assignee: p.assignee.clone(),
         project: p.project.clone(),
         module: p.module.clone(),
+        date: p.date.clone(),
         all: p.assignee.is_none(),
     };
-    let bound = filters.bind("");
+    let bound = match filters.bind("") {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
     let narrowed = p.status.is_some() || p.tag.is_some() || p.assignee.is_some()
-        || p.project.is_some() || p.module.is_some();
+        || p.project.is_some() || p.module.is_some() || p.date.is_some();
 
     match crate::vector::similar(
         &v, &app.pool, &ws, &text, &body, ask, min,

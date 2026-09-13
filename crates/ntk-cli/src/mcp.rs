@@ -49,6 +49,8 @@ pub struct LsArgs {
     // 500 счёту не мешает: считает база.
     pub count: Option<bool>,
     pub stale: Option<i64>,
+    // Отбор по датам: created_at:gte:2026-09-01,created_at:lte:2026-09-12.
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -86,6 +88,8 @@ pub struct SimilarArgs {
     pub assignee: Option<String>,
     pub project: Option<String>,
     pub module: Option<String>,
+    // Отбор по датам: created_at:gte:2026-09-01,created_at:lte:2026-09-12.
+    pub date: Option<String>,
     pub limit: Option<i64>,
     pub min_score: Option<f64>,
 }
@@ -281,6 +285,8 @@ pub struct WalkArgs {
     pub assignee: Option<String>,
     pub project: Option<String>,
     pub all: Option<bool>,
+    // Отбор по датам: created_at:gte:2026-09-01,created_at:lte:2026-09-12.
+    pub date: Option<String>,
     // Забыть показанное и пойти сначала.
     pub reset: Option<bool>,
 }
@@ -368,6 +374,7 @@ impl Ntk {
             strict: a.strict.unwrap_or(false),
             all: a.all.unwrap_or(false),
             stale: a.stale,
+            date: a.date,
         };
         if a.count.unwrap_or(false) {
             let n = c.count(&key, &a.workspace, &f).await.map_err(oops)?;
@@ -398,6 +405,7 @@ impl Ntk {
             all: a.all.unwrap_or(false),
             // Обход про проверку, а не про поиск брошенного: отбора нет.
             stale: None,
+            date: a.date,
         };
         let v = c
             .walk(&key, &a.workspace, &a.walk_id, &f, a.reset.unwrap_or(false))
@@ -575,6 +583,7 @@ impl Ntk {
         if let Some(v) = a.assignee { req["assignee"] = v.into(); }
         if let Some(v) = a.project { req["project"] = v.into(); }
         if let Some(v) = a.module { req["module"] = v.into(); }
+        if let Some(v) = a.date { req["date"] = v.into(); }
         let v = c.similar(&key, &a.workspace, &req).await.map_err(oops)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&v).map_err(oops)?,
@@ -750,6 +759,31 @@ mod tests {
         let listed: std::collections::BTreeSet<String> =
             ntk_core::tools::ALL.iter().map(|t| t.name.to_string()).collect();
         assert_eq!(served, listed, "the served tool set drifted from the catalogue");
+    }
+
+    /// И обратная сторона: поле, объявленное в каталоге, обязано быть в схеме.
+    ///
+    /// Без этой половины расхождение проходит МОЛЧА. Каталог отдаёт схему в
+    /// поверхность по HTTP, а здесь схему выводит rmcp из структур аргументов:
+    /// поле, добавленное только в каталог, появляется в одной поверхности и
+    /// отсутствует в другой, причём обе проверки при этом зелёные. Ровно так и
+    /// вышло с отбором по датам.
+    #[test]
+    fn every_catalogue_field_exists_in_the_schema() {
+        let n = Ntk::new();
+        for route in n.tool_router.map.values() {
+            let name = route.attr.name.as_ref();
+            let Some(t) = ntk_core::tools::get(name) else { continue };
+            let schema = serde_json::to_value(&route.attr.input_schema).unwrap();
+            let props = schema.get("properties").and_then(|p| p.as_object());
+            for f in t.fields {
+                assert!(
+                    props.map(|p| p.contains_key(f.name)).unwrap_or(false),
+                    "{name}: the catalogue declares {}, the schema here does not have it",
+                    f.name
+                );
+            }
+        }
     }
 
     /// Every field in the schema is described in the catalogue.
