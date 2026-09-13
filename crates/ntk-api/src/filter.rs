@@ -126,10 +126,19 @@ pub fn parse_dates(spec: Option<&str>) -> Result<Vec<DateTerm>, String> {
     Ok(out)
 }
 
-/// Условия по датам в SQL. Сравнение приводится к ДАТЕ, а не к моменту:
-/// `updated_at <= '2026-09-12'` на метке времени отсекло бы всё, что случилось
-/// в этот день после полуночи, и «по двенадцатое включительно» означало бы
-/// «по одиннадцатое». Обе границы включающие.
+/// Условия по датам в SQL.
+///
+/// Колонка НЕ приводится к дате. Напрашивается `created_at::date <= $1`, и это
+/// работает — но приведение убивает индекс. Замерено на боевой базе: с
+/// приведением план — Seq Scan по всей таблице, без него — Index Scan по
+/// tickets_assignee_created. Три индекса несут created_at, и обходить их ради
+/// удобства записи незачем.
+///
+/// Поэтому день разворачивается в промежуток по сырой колонке: «не позже
+/// двенадцатого» — это `< тринадцатого`, а не `<= двенадцатого`. Иначе на
+/// метке времени отсеклось бы всё, что случилось в этот день после полуночи, и
+/// «по двенадцатое включительно» значило бы «по одиннадцатое». Обе границы
+/// включающие, день покрывается целиком.
 pub fn apply_dates<'a>(
     sql: &mut String,
     args: &mut Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>,
@@ -137,11 +146,14 @@ pub fn apply_dates<'a>(
 ) {
     for t in terms {
         args.push(&t.value);
-        let op = if t.gte { ">=" } else { "<=" };
-        if t.with_time {
-            sql.push_str(&format!(" and {} {} ${}::timestamptz", t.col, op, args.len()));
-        } else {
-            sql.push_str(&format!(" and {}::date {} ${}::date", t.col, op, args.len()));
+        let n = args.len();
+        match (t.with_time, t.gte) {
+            (true, true) => sql.push_str(&format!(" and {} >= ${n}::timestamptz", t.col)),
+            (true, false) => sql.push_str(&format!(" and {} <= ${n}::timestamptz", t.col)),
+            (false, true) => sql.push_str(&format!(" and {} >= ${n}::date", t.col)),
+            // Строго меньше СЛЕДУЮЩЕГО дня — так весь названный день внутри, а
+            // индекс остаётся применим.
+            (false, false) => sql.push_str(&format!(" and {} < ${n}::date + 1", t.col)),
         }
     }
 }
@@ -309,5 +321,37 @@ mod date_tests {
     fn nothing_asked_nothing_added() {
         assert!(parse_dates(None).unwrap().is_empty());
         assert!(parse_dates(Some("")).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod date_sql_tests {
+    use super::{apply_dates, parse_dates};
+
+    /// Проверяется САМА СТРОКА запроса, а не только разбор.
+    ///
+    /// Планы измерялись на SQL, написанном руками; совпадает ли с ним то, что
+    /// порождает код, из тех замеров не следует никак. Эта проверка связывает
+    /// одно с другим: если форма условия изменится, замеры перестанут быть
+    /// доказательством, и тест об этом скажет.
+    ///
+    /// Форма важна дословно: приведение колонки к дате гонит запрос в полный
+    /// скан, поэтому колонка стоит сырой, а день развёрнут в промежуток.
+    #[test]
+    fn the_generated_sql_is_the_one_that_was_measured() {
+        let terms = parse_dates(Some(
+            "created_at:gte:2026-09-01,created_at:lte:2026-09-11,updated_at:gte:2026-09-01T12:35:00",
+        ))
+        .unwrap();
+        let mut sql = String::new();
+        let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+        apply_dates(&mut sql, &mut args, &terms);
+        assert_eq!(
+            sql,
+            " and created_at >= $1::date\
+             \u{20}and created_at < $2::date + 1\
+             \u{20}and updated_at >= $3::timestamptz"
+        );
+        assert_eq!(args.len(), 3);
     }
 }
