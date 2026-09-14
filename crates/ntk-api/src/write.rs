@@ -995,6 +995,15 @@ pub async fn create(
     }
     let searching = if p.skip_search { None } else { app.vector.clone() };
     let mut similar_seen: Vec<crate::vector::Similar> = Vec::new();
+    // Почему поиск дублей НЕ состоялся, если не состоялся.
+    //
+    // Раньше «искал и не нашёл» выглядело в ответе так же, как «не искал
+    // вовсе»: оба случая — молчание. А это разные вещи, и разница ложится на
+    // того, кто заводит: во втором случае дедупликация его, а он об этом не
+    // знает. Молча пропущенная проверка выглядит выполненной — ровно та
+    // болезнь, из-за которой отбор по датам однажды не применялся, а выдача
+    // казалась отфильтрованной.
+    let mut search_skipped: Option<String> = None;
     if let Some(v) = searching {
         let (stopping, show_score, block_score) = {
             match db::begin(&mut client, &ws).await {
@@ -1082,11 +1091,14 @@ pub async fn create(
                 // Провайдер лёг — заводим. Иначе его отказ останавливал бы
                 // всю работу команды, а цена ошибки здесь несравнима:
                 // пропущенный дубль правится, ненаведённый тикет теряется.
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    workspace = %ws,
-                    "похожих не искал, завожу как есть"
-                ),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        workspace = %ws,
+                        "похожих не искал, завожу как есть"
+                    );
+                    search_skipped = Some(format!("{e}"));
+                }
             }
         }
     }
@@ -1240,6 +1252,21 @@ pub async fn create(
     // Похожие уносим в ответ, даже когда не остановили: агент должен их
     // увидеть, иначе низкий порог показа не значит ничего.
     let mut out = json!({"id": id, "status": status});
+    // Предупреждения СОБИРАЮТСЯ, а не перезаписывают друг друга.
+    //
+    // Их было два, и второе затирало первое: о пропущенном поиске дублей
+    // сообщал тот же ключ, что о языке. То есть одно предупреждение молча
+    // исчезало ровно тогда, когда нужны были оба.
+    let mut warnings: Vec<String> = Vec::new();
+    if let Some(why) = &search_skipped {
+        out["duplicate_search"] = json!("skipped");
+        out["duplicate_search_reason"] = json!(why);
+        warnings.push(
+            "The duplicate search did not run, so this ticket was filed without one. \
+             Check the workspace yourself if a near-neighbour would matter."
+                .to_string(),
+        );
+    }
     if !similar_seen.is_empty() {
         out["similar"] = json!(similar_seen);
         out["notice"] = json!(
@@ -1248,7 +1275,10 @@ pub async fn create(
         );
     }
     if let Some(w) = language_warning {
-        out["warning"] = json!(w);
+        warnings.push(w);
+    }
+    if !warnings.is_empty() {
+        out["warning"] = json!(warnings.join(" "));
     }
     (StatusCode::CREATED, Json(out)).into_response()
 }
