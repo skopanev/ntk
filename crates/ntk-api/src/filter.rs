@@ -147,13 +147,20 @@ pub fn apply_dates<'a>(
     for t in terms {
         args.push(&t.value);
         let n = args.len();
+        // ЧЕРЕЗ ::text:: — иначе Postgres выведет тип параметра как date, а
+        // клиент шлёт строку, и запрос падает «error serializing parameter»,
+        // где про типы не сказано ни слова. Проверено на боевом: отбор по
+        // датам отвечал «внутренняя ошибка» на любой правильный запрос.
+        //
+        // Замеры планов делались с литералами, а не с параметрами, и потому
+        // этого не показали. План от добавления ::text не меняется.
         match (t.with_time, t.gte) {
-            (true, true) => sql.push_str(&format!(" and {} >= ${n}::timestamptz", t.col)),
-            (true, false) => sql.push_str(&format!(" and {} <= ${n}::timestamptz", t.col)),
-            (false, true) => sql.push_str(&format!(" and {} >= ${n}::date", t.col)),
+            (true, true) => sql.push_str(&format!(" and {} >= ${n}::text::timestamptz", t.col)),
+            (true, false) => sql.push_str(&format!(" and {} <= ${n}::text::timestamptz", t.col)),
+            (false, true) => sql.push_str(&format!(" and {} >= ${n}::text::date", t.col)),
             // Строго меньше СЛЕДУЮЩЕГО дня — так весь названный день внутри, а
             // индекс остаётся применим.
-            (false, false) => sql.push_str(&format!(" and {} < ${n}::date + 1", t.col)),
+            (false, false) => sql.push_str(&format!(" and {} < ${n}::text::date + 1", t.col)),
         }
     }
 }
@@ -348,9 +355,9 @@ mod date_sql_tests {
         apply_dates(&mut sql, &mut args, &terms);
         assert_eq!(
             sql,
-            " and created_at >= $1::date\
-             \u{20}and created_at < $2::date + 1\
-             \u{20}and updated_at >= $3::timestamptz"
+            " and created_at >= $1::text::date\
+             \u{20}and created_at < $2::text::date + 1\
+             \u{20}and updated_at >= $3::text::timestamptz"
         );
         assert_eq!(args.len(), 3);
     }
