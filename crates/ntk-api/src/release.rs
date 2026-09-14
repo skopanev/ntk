@@ -22,14 +22,46 @@ use serde::Deserialize;
 /// working binary with an incompatible one — the upgrade would have broken the
 /// machine rather than fixed it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlatformQuery {
     platform: Option<String>,
+    /// Конкретная версия вместо новейшей. Раньше этого поля не было вовсе, и
+    /// `?version=…` молча проглатывался: спрашиваешь 0.5.60, получаешь свежую.
+    /// Молчаливо проигнорированный параметр хуже отказа — он выглядит
+    /// исполненным.
+    version: Option<String>,
+}
+
+/// Имя платформы приводится к нашему написанию.
+///
+/// В докере архитектуру берут штатным путём — `TARGETARCH` или
+/// `dpkg --print-architecture`, — и оба говорят `amd64`. Мы же выкладываем
+/// `x86_64`, поэтому обычно написанный Dockerfile спрашивал `linux-amd64` и
+/// получал 404, а сборка падала на curl. На arm64 словари совпадают случайно,
+/// поэтому на Маке этого не видно вовсе — всплыло только на linux/amd64.
+///
+/// Переводим у себя, а не заставляем каждого держать свой перевод: тот, кто
+/// его не напишет, получит не отказ, а непонятную 404.
+fn normalise(p: &str) -> String {
+    let (os, arch) = match p.split_once('-') {
+        Some(v) => v,
+        None => return p.to_string(),
+    };
+    let arch = match arch {
+        "amd64" | "x64" | "x86-64" => "x86_64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{os}-{arch}")
 }
 
 fn wanted(q: &PlatformQuery) -> Option<String> {
-    q.platform.clone().filter(|p| {
-        !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    })
+    q.platform
+        .as_deref()
+        .filter(|p| {
+            !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+        .map(normalise)
 }
 use serde_json::json;
 
@@ -102,14 +134,26 @@ pub async fn download(State(app): State<Arc<App>>, Query(q): Query<PlatformQuery
     let Ok(c) = app.pool.get().await else {
         return (StatusCode::SERVICE_UNAVAILABLE, "the database is unavailable").into_response();
     };
-    let row = c
-        .query_opt(
-            "select object_key from core.releases
-              where platform = $1 and yanked_at is null
-              order by published_at desc limit 1",
-            &[&platform],
-        )
-        .await;
+    // Названная версия отдаётся именно она, а не новейшая.
+    let row = match q.version.as_deref().filter(|v| !v.is_empty()) {
+        Some(v) => {
+            c.query_opt(
+                "select object_key from core.releases
+                  where platform = $1 and version = $2 and yanked_at is null",
+                &[&platform, &v],
+            )
+            .await
+        }
+        None => {
+            c.query_opt(
+                "select object_key from core.releases
+                  where platform = $1 and yanked_at is null
+                  order by published_at desc limit 1",
+                &[&platform],
+            )
+            .await
+        }
+    };
     match row {
         Ok(Some(r)) => match spaces::presign_get(&app.cfg, &r.get::<_, String>(0), 900) {
             Ok(url) => Redirect::temporary(&url).into_response(),
@@ -213,4 +257,40 @@ echo "ntk $version installed in $DIR/ntk"
         script,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::normalise;
+
+    /// Докерное имя обязано работать без перевода на стороне того, кто нас
+    /// ставит: TARGETARCH и `dpkg --print-architecture` говорят `amd64`.
+    #[test]
+    fn the_docker_word_for_the_arch_is_accepted() {
+        assert_eq!(normalise("linux-amd64"), "linux-x86_64");
+        assert_eq!(normalise("darwin-amd64"), "darwin-x86_64");
+    }
+
+    /// И обратная пара: uname говорит `aarch64`, мы выкладываем `arm64`.
+    #[test]
+    fn the_uname_word_for_the_arch_is_accepted() {
+        assert_eq!(normalise("linux-aarch64"), "linux-arm64");
+    }
+
+    /// Наше собственное написание не трогается.
+    #[test]
+    fn our_own_spelling_survives_untouched() {
+        assert_eq!(normalise("linux-x86_64"), "linux-x86_64");
+        assert_eq!(normalise("darwin-arm64"), "darwin-arm64");
+        assert_eq!(normalise("linux-arm64"), "linux-arm64");
+    }
+
+    /// Незнакомое не выдумывается: пусть лучше будет честная 404, чем подмена
+    /// на «что-то похожее». Не тот бинарь ломает машину, а не установку.
+    #[test]
+    fn an_unknown_arch_is_left_alone() {
+        assert_eq!(normalise("linux-riscv64"), "linux-riscv64");
+        assert_eq!(normalise("plan9-386"), "plan9-386");
+        assert_eq!(normalise("nodash"), "nodash");
+    }
 }
