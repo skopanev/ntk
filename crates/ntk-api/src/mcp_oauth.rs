@@ -269,7 +269,15 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
             return crate::enroll::plain_page("Sign-in failed", &e.to_string());
         }
     };
-    let ident = match oauth::verify_id_token(&id_token, &app.cfg.google_client_id, &app.cfg.google_hd).await {
+    let named = crate::enroll::named_addresses(&c).await;
+    let ident = match oauth::verify_id_token(
+        &id_token,
+        &app.cfg.google_client_id,
+        &app.cfg.google_hd,
+        &named,
+    )
+    .await
+    {
         Ok(i) => i,
         Err(e) => return crate::enroll::plain_page("Access denied", &e.to_string()),
     };

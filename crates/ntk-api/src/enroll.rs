@@ -290,7 +290,18 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
         }
     };
 
-    let ident = match oauth::verify_id_token(&id_token, &app.cfg.google_client_id, &app.cfg.google_hd).await {
+    let named = match app.pool.get().await {
+        Ok(c) => named_addresses(&c).await,
+        Err(_) => Vec::new(),
+    };
+    let ident = match oauth::verify_id_token(
+        &id_token,
+        &app.cfg.google_client_id,
+        &app.cfg.google_hd,
+        &named,
+    )
+    .await
+    {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(error = %e, "the token was not accepted");
@@ -348,6 +359,23 @@ async fn enroll(
     }
     tx.commit().await?;
     Ok(workspaces)
+}
+
+/// Адреса, выписанные администратором ПОИМЁННО.
+///
+/// Нужны заслону при входе: личный аккаунт пускается, только если он назван
+/// отдельной строкой. Читается на каждый вход, а не кэшируется, — входы редки,
+/// а кэш здесь означал бы «отозвал доступ, а он ещё работает».
+///
+/// Отказ базы отдаёт ПУСТОЙ список, а не ошибку: недоступная база не должна
+/// превращаться в «пускаем всех». Пустой список закрывает заслон, а не
+/// открывает.
+pub async fn named_addresses(client: &deadpool_postgres::Client) -> Vec<String> {
+    client
+        .query("select match_value from core.enrollment_rules where match_type='email'", &[])
+        .await
+        .map(|rows| rows.iter().map(|r| r.get::<_, String>(0)).collect())
+        .unwrap_or_default()
 }
 
 /// A person Google recognised → a row in `core.users` and their workspaces.

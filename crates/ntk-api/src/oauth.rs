@@ -102,10 +102,32 @@ pub async fn exchange_code(
 /// whereas Google rotating its keys must never catch us holding the old set. A
 /// cache here would save milliseconds at the price of a class of bugs that read
 /// as "it worked yesterday".
+/// Пускать ли этого человека. Отдельной функцией — потому что это решение о
+/// ДОСТУПЕ, и его надо уметь проверить без Google и без сети.
+fn admitted(
+    hd: Option<&str>,
+    email: &str,
+    allowed_domains: &[String],
+    named_addresses: &[String],
+) -> Result<()> {
+    let named = named_addresses.iter().any(|a| a.eq_ignore_ascii_case(email));
+    match hd {
+        Some(hd) if allowed_domains.iter().any(|d| d == hd) => Ok(()),
+        Some(_) if named => Ok(()),
+        Some(hd) => bail!("the domain {hd} is not on the allowed list"),
+        None if named => Ok(()),
+        None => bail!(
+            "this is a personal Google account, not a workspace one: sign in with your organisation \
+             account, or ask an administrator to add this exact address"
+        ),
+    }
+}
+
 pub async fn verify_id_token(
     id_token: &str,
     client_id: &str,
     allowed_domains: &[String],
+    named_addresses: &[String],
 ) -> Result<Identity> {
     let header = decode_header(id_token).context("the token header did not parse")?;
     if header.alg != Algorithm::RS256 {
@@ -133,10 +155,72 @@ pub async fn verify_id_token(
     if !ident.email_verified {
         bail!("the address {} is not verified with Google", ident.email);
     }
-    match ident.hd.as_deref() {
-        Some(hd) if allowed_domains.iter().any(|d| d == hd) => {}
-        Some(hd) => bail!("the domain {hd} is not on the allowed list"),
-        None => bail!("this is a personal Google account, not a workspace one: sign in with your organisation account"),
-    }
+    // Личный адрес пускается, если администратор назвал ИМЕННО ЕГО.
+    //
+    // Здесь стояло глухое «личный аккаунт — не пущу», и оно спорило с
+    // соседним слоем: разбор правил зачисления прямо обещает, что «личный
+    // адрес добавляется одной строкой, без расширения доменного правила на
+    // всех». Обещание в одном месте, запрет в другом — и до правила дело не
+    // доходило вовсе, потому что вход отвергался раньше.
+    //
+    // Заслон при этом остаётся закрытым: пускается не «любой gmail», а ровно
+    // тот адрес, который выписан в core.enrollment_rules отдельной строкой.
+    // Доменное правило такой силы НЕ даёт — иначе один публичный почтовик
+    // открыл бы воркспейс всему свету.
+    admitted(ident.hd.as_deref(), &ident.email, allowed_domains, named_addresses)?;
     Ok(ident)
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::admitted;
+
+    fn v(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Корпоративный аккаунт с разрешённого домена — как было.
+    #[test]
+    fn an_allowed_domain_passes() {
+        assert!(admitted(Some("acme.example"), "a@acme.example", &v(&["acme.example"]), &[]).is_ok());
+    }
+
+    /// Чужой домен не пускается, сколько бы личных адресов ни было выписано.
+    #[test]
+    fn an_unlisted_domain_is_refused() {
+        let e = admitted(Some("other.example"), "a@other.example", &v(&["acme.example"]), &v(&["b@mail.example"]));
+        assert!(e.is_err());
+    }
+
+    /// Личный аккаунт БЕЗ поимённой записи — отказ, как и был.
+    ///
+    /// Это половина, ради которой заслон и стоит: без неё один публичный
+    /// почтовик открыл бы воркспейс всему свету.
+    #[test]
+    fn a_personal_account_is_still_refused_by_default() {
+        let e = admitted(None, "stranger@mail.example", &v(&["acme.example"]), &v(&["named@mail.example"]));
+        assert!(e.is_err(), "личный адрес без записи обязан быть отвергнут");
+        assert!(format!("{}", e.unwrap_err()).contains("personal Google account"));
+    }
+
+    /// Личный аккаунт, выписанный ПОИМЁННО, — пускается.
+    #[test]
+    fn a_named_personal_address_passes() {
+        assert!(admitted(None, "named@mail.example", &[], &v(&["named@mail.example"])).is_ok());
+    }
+
+    /// Регистр в адресе значения не имеет: человек наберёт как придётся.
+    #[test]
+    fn the_address_matches_regardless_of_case() {
+        assert!(admitted(None, "Named@Mail.Example", &[], &v(&["named@mail.example"])).is_ok());
+    }
+
+    /// Пустой список поимённых закрывает заслон, а не открывает.
+    ///
+    /// Список читается из базы на каждый вход, и отказ базы отдаёт пустоту.
+    /// Пустота обязана означать «никого дополнительно», а не «всех».
+    #[test]
+    fn an_empty_list_admits_nobody_extra() {
+        assert!(admitted(None, "anyone@mail.example", &v(&["acme.example"]), &[]).is_err());
+    }
 }
