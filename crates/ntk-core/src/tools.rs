@@ -324,7 +324,7 @@ pub const ALL: &[Tool] = &[
         cli: "start",
         title: "Take a ticket into work",
         about: "Take a named ticket into work.",
-        desc: "Take a NAMED ticket into work. If someone already took it, you get a refusal carrying the current status, not silence.",
+        desc: "Take a NAMED ticket into work. If someone already took it, you get a refusal carrying the current status, not silence. THE DEPENDENCY GUARD APPLIES HERE TOO: a ticket waiting on unfinished work is refused, and there is no flag that lifts it — naming the ticket outright is not a way around the queue. ntk_deps shows what is holding it.",
         read_only: false,
         destructive: false,
         idempotent: false,

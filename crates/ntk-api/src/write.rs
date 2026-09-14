@@ -597,11 +597,7 @@ pub async fn patch(
             } else if was + add > max {
                 return oops(
                     StatusCode::BAD_REQUEST,
-                    &format!(
-                        "the body after appending is over the limit: {} characters against {max}. \
-                         Split the work into separate tickets and link them with --deps.",
-                        was + add
-                    ),
+                    &format!("{}", append_refusal(was, a.chars().count(), max)),
                 );
             }
         }
@@ -2478,6 +2474,35 @@ async fn write_limit(tx: &deadpool_postgres::Transaction<'_>, field: &str) -> Op
 /// Без «что делать» предел просто мешает: человек видит отказ и всё равно
 /// вынужден угадывать. Оба выхода настоящие — вложения у тикета есть, а
 /// разбиение на атомарные тикеты и есть цель предела.
+/// Отказ на ДОПИСЫВАНИИ обязан говорить, чего не хватило: места в теле или
+/// места под добавку.
+///
+/// Прежде он говорил только итог — «2032 против 2000». Полосы дважды прочли
+/// это как «моя добавка велика» и принялись резать добавку, тогда как места не
+/// было вовсе: у тела под потолком не помещается и один символ. Резали не то,
+/// и не могли не резать не то — из сообщения это не следовало.
+///
+/// Поэтому называется остаток. Он же отвечает на вопрос, который следует
+/// задать: резать добавку или освобождать тело.
+fn append_refusal(was: usize, add_chars: usize, max: usize) -> String {
+    // Разделитель — пустая строка, два символа, и он тоже занимает место.
+    let sep = if was > 0 { 2 } else { 0 };
+    let room = max.saturating_sub(was + sep);
+    if room == 0 {
+        return format!(
+            "no room to append: the body already holds {was} of {max} characters, and the blank line \
+             that separates an addition takes {sep} more. NOTHING fits, however short — cutting the \
+             addition will not help. Free room in the body first, or file the work as its own ticket \
+             and link it with --deps."
+        );
+    }
+    format!(
+        "the addition does not fit: {add_chars} characters offered, room for {room}. The limit counts \
+         the RESULT of the join — body {was} plus the blank separator {sep} plus the addition against \
+         {max}. Shorten the addition to {room}, or file it as its own ticket and link it with --deps."
+    )
+}
+
 /// Отказ обязан называть, СКОЛЬКО ЛИШНЕГО, а не только предел.
 ///
 /// «2100 при 2000» вычитается в уме, но вычитать приходится каждый раз, и в
@@ -2817,5 +2842,47 @@ mod twin_name_tests {
         // Второе имя того же репозитория правилом НЕ ловится, и это честно:
         // строкового сходства здесь нет, ловить нечем.
         assert!(!same_name_really("bkd", "core-backend"));
+    }
+}
+
+#[cfg(test)]
+mod append_refusal_tests {
+    use super::append_refusal;
+
+    /// Тело под потолком: не помещается НИЧЕГО, и это надо сказать прямо.
+    ///
+    /// Прежний отказ называл только итог, и его дважды прочли как «добавка
+    /// велика» — резали добавку там, где резать надо было тело.
+    #[test]
+    fn a_full_body_says_nothing_fits() {
+        let m = append_refusal(1999, 50, 2000);
+        assert!(m.contains("NOTHING fits"), "{m}");
+        assert!(m.contains("cutting the addition will not help"), "{m}");
+    }
+
+    /// Место есть — тогда называется, сколько именно, чтобы не резать вслепую.
+    #[test]
+    fn room_left_is_named_exactly() {
+        // 1900 + 2 на разделитель = 1902; до 2000 остаётся 98.
+        let m = append_refusal(1900, 300, 2000);
+        assert!(m.contains("room for 98"), "{m}");
+        assert!(m.contains("300 characters offered"), "{m}");
+        assert!(m.contains("Shorten the addition to 98"), "{m}");
+    }
+
+    /// Разделитель считается, и об этом сказано: иначе «1900 + 100 = 2000»
+    /// выглядит проходящим, а не отвергнутым.
+    #[test]
+    fn the_separator_is_counted_and_named() {
+        let m = append_refusal(1900, 99, 2000);
+        assert!(m.contains("blank separator 2"), "{m}");
+        assert!(m.contains("RESULT of the join"), "{m}");
+    }
+
+    /// В пустое тело разделитель не нужен, и место считается без него.
+    #[test]
+    fn an_empty_body_pays_no_separator() {
+        let m = append_refusal(0, 2500, 2000);
+        assert!(m.contains("room for 2000"), "{m}");
     }
 }
