@@ -12,6 +12,7 @@
 
 /// Каталог инструментов: одно описание на терминал, локальный MCP и MCP по HTTP.
 pub mod tools;
+pub mod attachments;
 
 use serde::{Deserialize, Serialize};
 

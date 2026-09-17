@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::{api, config};
+use ntk_core::attachments::AttachArgs;
 
 #[derive(Clone)]
 pub struct Ntk {
@@ -349,6 +350,20 @@ impl Ntk {
         let cfg = config::load().map_err(oops)?;
         let key = config::require_key(&cfg).map_err(oops)?.to_string();
         Ok((api::Client::new(&cfg.url), key))
+    }
+
+    #[tool]
+    async fn ntk_attach(&self, Parameters(a): Parameters<AttachArgs>) -> Result<CallToolResult, McpError> {
+        let (c, key) = Self::client().await?;
+        let result = c.attach(&key, a).await.map_err(oops)?;
+        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
+    }
+
+    #[tool]
+    async fn ntk_attachments(&self, Parameters(a): Parameters<IdArgs>) -> Result<CallToolResult, McpError> {
+        let (c, key) = Self::client().await?;
+        let result = c.attachments(&key, &a.workspace, &a.id).await.map_err(oops)?;
+        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
     }
 
     #[tool]

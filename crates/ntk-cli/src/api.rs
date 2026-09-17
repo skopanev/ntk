@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::time::Duration;
+mod attachments;
 
 /// Отборы списка. Пустое поле — «не отбирать по этому».
 #[derive(Default, Clone)]

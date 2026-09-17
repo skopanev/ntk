@@ -24,6 +24,7 @@
 //! and is enforced by the database; what is here is what we say about it.
 
 use serde_json::{json, Map, Value};
+mod attachments;
 
 /// Title limit, in characters.
 pub const TITLE_MAX: usize = 256;
@@ -226,6 +227,8 @@ const ASSIGNEE_SET: Field = Field::opt(
 );
 
 pub const ALL: &[Tool] = &[
+    attachments::ATTACH,
+    attachments::LIST,
     Tool {
         name: "ntk_whoami",
         cli: "whoami",
@@ -335,7 +338,7 @@ pub const ALL: &[Tool] = &[
         cli: "create",
         title: "Create ticket",
         about: "Create a ticket.",
-        desc: "Create a ticket. The server assigns the identifier. Where vectorisation is switched on, this first looks for tickets that already say the same thing and REFUSES if it finds one, listing what it found; pass skip_search=true to file anyway. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment. Write tickets in English.",
+        desc: "Create a ticket. The server assigns the identifier. Where vectorisation is switched on, this first looks for tickets that already say the same thing and REFUSES if it finds one, listing what it found; pass skip_search=true to file anyway. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment using ntk_attach. Write tickets in English.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -359,7 +362,7 @@ pub const ALL: &[Tool] = &[
         cli: "update",
         title: "Change ticket",
         about: "Change a ticket: status, title, body, assignee, tags.",
-        desc: "Change a ticket in ONE call: status, title, body, assignee and tags together, applied in one transaction — the ticket is never seen half-changed. A ticket outside the todo group is already picked up by someone and needs force. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment. Write tickets in English.",
+        desc: "Change a ticket in ONE call: status, title, body, assignee and tags together, applied in one transaction — the ticket is never seen half-changed. A ticket outside the todo group is already picked up by someone and needs force. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment using ntk_attach. Write tickets in English.",
         read_only: false,
         destructive: true,
         idempotent: true,

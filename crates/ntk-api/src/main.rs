@@ -159,7 +159,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/oauth/authorize", get(mcp_oauth::authorize))
         .route("/oauth/google/callback", get(mcp_oauth::callback))
         .route("/oauth/token", post(mcp_oauth::token))
-        .route(mcp_oauth::MCP_PATH, post(mcp_http::endpoint).get(mcp_http::endpoint_get))
+        .route(mcp_oauth::MCP_PATH, post(mcp_http::endpoint).get(mcp_http::endpoint_get)
+            .layer(axum::extract::DefaultBodyLimit::max(ntk_core::attachments::MAX_REQUEST)))
         .with_state(app);
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;

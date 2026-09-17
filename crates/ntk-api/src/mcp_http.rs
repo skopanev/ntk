@@ -23,6 +23,7 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::{auth, mcp_oauth, write, App};
+mod attachments;
 
 /// Кому уже сказали «перечитай список инструментов».
 ///
@@ -174,6 +175,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
     }
 
     match name {
+        "ntk_attach" | "ntk_attachments" => attachments::call(app, token, name, args).await,
         "ntk_whoami" => body_text(crate::whoami(st, h).await).await,
 
         "ntk_ls" => {

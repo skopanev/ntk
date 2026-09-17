@@ -101,6 +101,28 @@ ntk ls -W test -s in_progress -t infra
 `-t` on `update` takes signed tags — `+add`, `-remove`. Unsigned is rejected, so
 that "add" never turns out to have meant "replace everything".
 
+## MCP attachments
+
+Both local stdio and remote HTTP MCP expose `ntk_attach` and `ntk_attachments`.
+Attach a document in one call; no tracker URL or browser form is needed:
+
+```json
+{"name":"ntk_attach","arguments":{"workspace":"test","id":"ntk-xxxxxxxxxx","filename":"research.md","content_type":"text/markdown","content":"# Findings\nDetails go here."}}
+```
+
+Provide exactly one source: `content` for UTF-8 text, `content_base64` for
+binary files (standard padded base64), or `path` for an absolute file path on
+the **local stdio MCP machine**. Remote HTTP MCP accepts contents, never local
+paths. Files must contain 1 byte to 50 MiB; the remote JSON request limit is
+about 68 MiB. Upload success is returned only after storage verification and
+attachment registration. Repeating an upload creates another attachment, so
+after an uncertain response, list attachments before retrying.
+
+Call `ntk_attachments` with `workspace` and `id` for filenames, sizes, MIME
+types and download links valid for 15 minutes. Call again to refresh links.
+Local users need the updated binary and a restarted MCP process; remote users
+need the updated API deployment and a refreshed tool list.
+
 ## Statuses
 
 Statuses come from the server, not from a list compiled into the client. Each one
