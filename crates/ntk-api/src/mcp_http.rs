@@ -600,7 +600,8 @@ pub async fn endpoint(State(app): State<Arc<App>>, headers: HeaderMap, body: Str
                 // инструментов изменится. Без него клиент не обязан слушать, и
                 // перечитывать список ему незачем.
                 "capabilities": {"tools": {"listChanged": true}},
-                "serverInfo": {"name": "ntk", "version": env!("CARGO_PKG_VERSION")}
+                "serverInfo": {"name": "ntk", "version": env!("CARGO_PKG_VERSION")},
+                "instructions": mcp_oauth::AUTH_HELP
             }));
             if let Ok(v) = axum::http::HeaderValue::from_str(&sid) {
                 r.headers_mut().insert("mcp-session-id", v);

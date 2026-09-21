@@ -448,15 +448,35 @@ pub async fn actor_from_token(
 /// A 401 by the book: without this header the client has no way of learning
 /// where to ask for permission, and will show the person a bare
 /// "unauthorised".
+pub const AUTH_HELP: &str = "Use the MCP client's native OAuth sign-in. In Codex CLI, run `codex mcp login ntk` in a terminal with the same Codex configuration; finish browser sign-in with Return to app, then reconnect MCP. In Codex app, use MCP server settings > Authenticate. In Claude Code or agy, use /mcp > ntk > Authenticate. If the server was renamed in client settings, use that configured name. Do not ask the user for API keys or implement OAuth with curl.";
+
 pub fn unauthorized(base: &str, detail: &str) -> Response {
     let meta = format!("{}/.well-known/oauth-protected-resource", base.trim_end_matches('/'));
     (
         StatusCode::UNAUTHORIZED,
         [(
             axum::http::header::WWW_AUTHENTICATE,
-            format!("Bearer resource_metadata=\"{meta}\""),
+            format!("Bearer resource_metadata=\"{meta}\", error_description=\"Sign in with your MCP client. Codex CLI: codex mcp login ntk\""),
         )],
-        Json(json!({"error": "invalid_token", "error_description": detail})),
+        Json(json!({"error": "invalid_token", "error_description": format!("{detail}. {AUTH_HELP}")})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod auth_help_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unauthorized_preserves_oauth_discovery_and_explains_native_login() {
+        let response = unauthorized("https://ntk.example", "authentication required");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let challenge = response.headers()[axum::http::header::WWW_AUTHENTICATE].to_str().unwrap();
+        assert!(challenge.contains("resource_metadata=\"https://ntk.example/.well-known/oauth-protected-resource\""));
+        assert!(challenge.contains("codex mcp login ntk"));
+        let bytes = axum::body::to_bytes(response.into_body(), 16384).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "invalid_token");
+        assert!(body["error_description"].as_str().unwrap().contains(AUTH_HELP));
+    }
 }
