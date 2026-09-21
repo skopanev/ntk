@@ -245,6 +245,11 @@ place of `YOUR_NTK_DOMAIN` below.
    Sign in with the Google account that has NTK access. The local CLI's saved
    key does not automatically become the HTTP client's OAuth session.
 
+   In Codex CLI, run `codex mcp login ntk` from a terminal using the same
+   Codex configuration. Complete browser sign-in and choose **Return to app**.
+   Codex waits for a local callback; a container must expose that callback to
+   your browser. After the login command succeeds, restart the Codex session.
+
 4. **Finish the browser step.** Choose **Copy sign-in link** on NTK's page and
    paste the complete link into Claude's pending authorization prompt. Keep
    both `code` and `state`; do not extract only the code or paste an old attempt's
