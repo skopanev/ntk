@@ -186,13 +186,19 @@ choose; an archived module stays visible but cannot be picked for new work.
 
 ## MCP
 
-```bash
-ntk mcp
-```
+Connect a remote HTTP MCP server at `https://YOUR_NTK_DOMAIN/mcp-claude`.
+Sign in with Google using an account allowed by the NTK enrollment rules.
+No local NTK executable is needed for this connection.
 
-Speaks over stdio, so Claude Desktop and agents get the same commands the
-terminal gets — the same permissions and the same refusals, not a second
-implementation that drifts.
+For clients with a localhost callback, NTK stays on a **Finish signing in** page.
+Choose **Copy sign-in link** and paste the complete link into the app's sign-in
+prompt. The link preserves the authorization code and client state; it expires
+in five minutes and can be exchanged once with the initiating client's PKCE
+verifier. If the app runs on the same computer as the browser, **Return to app**
+can complete the local callback instead. Hosted HTTPS callbacks keep their
+registered redirect.
+
+HTTP MCP uses the same command catalogue and permissions as the API.
 
 ## Repository
 

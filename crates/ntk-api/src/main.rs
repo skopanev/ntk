@@ -15,6 +15,7 @@ mod attach;
 mod filter;
 mod mcp_http;
 mod mcp_oauth;
+mod mcp_oauth_completion;
 mod release;
 mod spaces;
 mod vector;

@@ -302,12 +302,7 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
         return crate::enroll::plain_page("Access denied", &format!("{e:#}"));
     }
 
-    let sep = if redirect_uri.contains('?') { '&' } else { '?' };
-    let mut to = format!("{redirect_uri}{sep}code={code}");
-    if let Some(s) = client_state {
-        to.push_str(&format!("&state={}", urlencoding::encode(&s)));
-    }
-    Redirect::to(&to).into_response()
+    crate::mcp_oauth_completion::finish(&redirect_uri, &code, client_state.as_deref())
 }
 
 #[derive(Deserialize)]
