@@ -200,6 +200,61 @@ registered redirect.
 
 HTTP MCP uses the same command catalogue and permissions as the API.
 
+### Migrating from CLI/stdio to HTTP MCP
+
+If your MCP entry contains `"command": "ntk"` (or an absolute path to the binary)
+and `"args": ["mcp"]`, it still starts the local CLI. Replace that **existing**
+entry with HTTP; keep the server name `ntk`. Use your deployment's hostname in
+place of `YOUR_NTK_DOMAIN` below.
+
+1. **Replace the connection.** For a globally installed Claude Code server:
+
+   ```sh
+   claude mcp remove --scope user ntk
+   claude mcp add --transport http --scope user ntk https://YOUR_NTK_DOMAIN/mcp-claude
+   ```
+
+   If the old entry is project/local scoped, replace it in that scope instead;
+   an old project entry can override the new global entry.
+
+   For Claude or agy JSON configuration, replace only the `ntk` object inside
+   `mcpServers`:
+
+   ```json
+   "ntk": {
+     "type": "http",
+     "url": "https://YOUR_NTK_DOMAIN/mcp-claude"
+   }
+   ```
+
+   For Codex, replace the old `[mcp_servers.ntk]` block in the active
+   `config.toml`:
+
+   ```toml
+   [mcp_servers.ntk]
+   url = "https://YOUR_NTK_DOMAIN/mcp-claude"
+   ```
+
+   Remove the old entry's `command`, `args` and CLI-only environment settings.
+   Preserve other MCP servers and unrelated client settings.
+
+2. **Restart the client session.** If it runs in a container, start a new
+   container session so it loads the updated MCP configuration.
+
+3. **Authenticate again.** In Claude Code, open `/mcp` → `ntk` → Authenticate.
+   Sign in with the Google account that has NTK access. The local CLI's saved
+   key does not automatically become the HTTP client's OAuth session.
+
+4. **Finish the browser step.** Choose **Copy sign-in link** on NTK's page and
+   paste the complete link into Claude's pending authorization prompt. Keep
+   both `code` and `state`; do not extract only the code or paste an old attempt's
+   link. If the attempt expired, start authentication again. Clients without a
+   callback-paste prompt need **Return to app** and a reachable local callback.
+
+5. **Verify and remove the old CLI.** Confirm that `ntk` connects and exposes
+   its tools, then uninstall the local NTK executable using its installation
+   method. Your tickets and workspace access remain on the same NTK server.
+
 ## Repository
 
 Four crates, because they have different fates: the core is shared, the CLI is
