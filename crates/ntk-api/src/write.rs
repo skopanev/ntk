@@ -1433,6 +1433,94 @@ pub async fn remove(
     }
 }
 
+/// Возврат удалённого тикета.
+///
+/// Обратная сторона `remove`, и появилась она не из симметрии. 21.09 агент
+/// снёс пятьдесят тикетов одним заходом, перепутав снятие тега с удалением, —
+/// и вернуть их было НЕЧЕМ: удаление мягкое, строки лежали на месте, но
+/// добраться до них можно было только руками в боевой базе по ssh. То есть
+/// восстановление существовало ровно пока существовал тот, у кого есть ключ.
+///
+/// Два отличия от `remove`, и оба вынужденные.
+///
+/// Первое: `canonical_id` здесь не годится — он ищет среди ЖИВЫХ, а нам нужен
+/// как раз мёртвый. Приведение идентификатора делается своим запросом.
+///
+/// Второе и важное: долг на ИНДЕКСАЦИЮ. Тикет оживает в обход обычной записи,
+/// поэтому сам по себе долг не появится, и тикет вернётся в списки, но не в
+/// поиск — живой и ненаходимый. Ровно эта дыра и открылась 21.09, когда
+/// пятьдесят строк вернули правкой `deleted_at`: сверка закрыла бы её лишь
+/// следующим проходом. Здесь она закрывается сразу.
+pub async fn restore(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<Ws>,
+) -> Response {
+    let (mut client, actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tx = match db::begin(&mut client, &ws).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+    };
+
+    // Ищем среди УДАЛЁННЫХ: живого возвращать нечего, и молчаливый успех на
+    // живом скрыл бы опечатку в номере.
+    let Ok(Some(row)) = tx
+        .query_opt(
+            "select id from tickets where lower(id) = lower($1) and deleted_at is not null",
+            &[&id],
+        )
+        .await
+    else {
+        return oops(
+            StatusCode::NOT_FOUND,
+            "no such removed ticket: it was never removed, or there is no such id",
+        );
+    };
+    let id: String = row.get(0);
+
+    if tx
+        .execute(
+            "update tickets set deleted_at = null where id = $1",
+            &[&id],
+        )
+        .await
+        .is_err()
+    {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    }
+
+    // Долг в ТОЙ ЖЕ транзакции, что и возврат: иначе возможен тикет, который
+    // ожил, но в индекс не попал, и никто об этом не узнает.
+    if let Err(e) = enqueue_upsert(&tx, &id).await {
+        tracing::error!(error = %e, ticket = %id, workspace = %ws, "долг индексации не поставлен");
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    }
+
+    // На чём он стоит — говорится вслух: пока его не было, эти зависимости
+    // никого не держали, и вернувшийся тикет может снова кого-то заблокировать.
+    let blocks: Vec<String> = tx
+        .query(
+            "select d.ticket_id from deps d
+               join tickets t on t.id = d.ticket_id and t.deleted_at is null
+              where d.depends_on = $1",
+            &[&id],
+        )
+        .await
+        .map(|rows| rows.iter().map(|r| r.get::<_, String>(0)).collect())
+        .unwrap_or_default();
+
+    if tx.commit().await.is_err() {
+        return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    }
+    tracing::info!(actor = %actor.user_id, ticket = %id, workspace = %ws, "тикет возвращён");
+    crate::vector::wake(&app);
+    Json(json!({"id": id, "restored": true, "now_blocking": blocks})).into_response()
+}
+
 /// Содержимое воркспейса одним ответом: статусы с группами, приоритеты,
 /// проекты, люди.
 ///

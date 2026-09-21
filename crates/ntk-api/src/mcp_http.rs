@@ -335,7 +335,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             body_text(write::patch(st, h, Path(id), Json(parsed)).await).await
         }
 
-        "ntk_deps" | "ntk_rm" | "ntk_meta" => {
+        "ntk_deps" | "ntk_rm" | "ntk_restore" | "ntk_meta" => {
             let uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
             let Ok(Query(qq)) = Query::try_from_uri(&uri.parse().unwrap()) else {
                 return (false, "no workspace given".into());
@@ -347,6 +347,7 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             match name {
                 "ntk_deps" => body_text(write::deps(st, h, Path(id), Query(qq)).await).await,
                 "ntk_rm" => body_text(write::remove(st, h, Path(id), Query(qq)).await).await,
+                "ntk_restore" => body_text(write::restore(st, h, Path(id), Query(qq)).await).await,
                 "ntk_meta" => body_text(write::meta(st, h, Query(qq)).await).await,
                 other => (false, format!("{other} is in the group but has no branch")),
             }

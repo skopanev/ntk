@@ -435,6 +435,17 @@ pub const ALL: &[Tool] = &[
         fields: &[WS, ID],
     },
     Tool {
+        name: "ntk_restore",
+        cli: "restore",
+        title: "Restore ticket",
+        about: "Bring back a removed ticket.",
+        desc: "Bring back a removed ticket under its OWN id, with body, tags, status and dependencies intact. Removal only marks the ticket, so nothing was lost and nothing is recreated: the same row comes back, and links from commits and other tickets keep working. Search finds it again too. Refuses a ticket that was never removed, so a typo in the id cannot pass as success.",
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+        fields: &[WS, ID],
+    },
+    Tool {
         name: "ntk_meta",
         cli: "meta",
         title: "Workspace directories",
