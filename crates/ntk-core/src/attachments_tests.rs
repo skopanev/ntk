@@ -1,13 +1,16 @@
 use super::*;
 use serde_json::json;
 
-fn args(source: serde_json::Value) -> AttachArgs {
+fn parse(source: serde_json::Value) -> Result<AttachArgs, serde_json::Error> {
     let mut value = json!({"workspace": "test", "id": "test-123", "filename": "file.txt"});
     value
         .as_object_mut()
         .unwrap()
         .extend(source.as_object().unwrap().clone());
-    serde_json::from_value(value).unwrap()
+    serde_json::from_value(value)
+}
+fn args(source: serde_json::Value) -> AttachArgs {
+    parse(source).unwrap()
 }
 
 #[test]
@@ -32,18 +35,21 @@ fn rejects_missing_ambiguous_empty_or_invalid_sources() {
         json!({"content_base64": ""}),
         json!({"content_base64": "not base64!"}),
         json!({"content": "hello", "content_base64": "aA=="}),
-        json!({"content": "hello", "path": "/tmp/file"}),
     ] {
         assert!(args(source.clone()).inline_bytes().is_err(), "{source}");
     }
 }
 
+/// Пути на диске не принимаются ВООБЩЕ — не отклоняются позже, а не
+/// существуют как аргумент. Раньше поле было объявлено и отвечало «только для
+/// локального stdio»; локального клиента нет с 21.09.2026, и объявленный
+/// аргумент остался обещанием, на которое модель тратит попытку.
 #[test]
-fn remote_cannot_read_server_files() {
-    let error = args(json!({"path": "/etc/passwd"}))
-        .inline_bytes()
-        .unwrap_err();
-    assert!(error.contains("local stdio MCP"));
+fn a_path_on_disk_is_not_an_argument_at_all() {
+    let error = parse(json!({"path": "/etc/passwd"})).unwrap_err().to_string();
+    assert!(error.contains("unknown field `path`"), "{error}");
+    let error = args(json!({})).inline_bytes().unwrap_err();
+    assert!(error.contains("content or content_base64"), "{error}");
 }
 
 #[test]

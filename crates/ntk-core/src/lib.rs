@@ -90,6 +90,16 @@ pub struct Ticket {
     #[serde(default)]
     pub deps: Vec<String>,
     pub due: Option<String>,
+    /// Тело. В списке его по умолчанию НЕТ — и это единственное поле, которое
+    /// из ответа исчезает.
+    ///
+    /// Исключение из правила выше сделано по замеру: тело тянет около двух с
+    /// половиной тысяч знаков, и полсотни тикетов — обычная страница — давали
+    /// сто тридцать тысяч. Правило запрещает форме зависеть от ДАННЫХ:
+    /// «у этого тикета поля нет, а у того есть» — гадание. Здесь форма
+    /// зависит от ЗАПРОСА и одинакова для всех тикетов ответа, а сам ответ
+    /// говорит о пропуске прямо: `bodies_omitted`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -154,17 +164,23 @@ mod tests {
         //
         // Тест переписан вслед за решением, а не подогнан: проверяется, что
         // ПУСТОЙ тикет отдаёт все поля, включая null.
-        let t = Ticket {
+        //
+        // Одно исключение — тело, и оно сделано по замеру: список без тел
+        // втрое короче, а с ними не помещается в контекст. Форма при этом
+        // зависит не от данных, а от запроса и одинакова для всех тикетов
+        // одного ответа; сам ответ объявляет пропуск полем bodies_omitted.
+        // Поэтому здесь проверяется ОБА состояния, а не снято правило.
+        let empty = Ticket {
             id: "tst-1".into(), uuid: "u".into(), title: "t".into(), status: "open".into(),
             priority: None, kind: None, assignee: None, project: None, module: None,
             tags: vec![], deps: vec![], due: None, body: None,
             created_at: "now".into(), updated_at: "now".into(),
             started_at: None, closed_at: None, current_status_at: None,
         };
-        let json = serde_json::to_string(&t).unwrap();
+        let json = serde_json::to_string(&empty).unwrap();
         for field in [
             "id", "uuid", "title", "status", "priority", "type", "assignee",
-            "project", "module", "tags", "deps", "due", "body", "created_at", "updated_at",
+            "project", "module", "tags", "deps", "due", "created_at", "updated_at",
             "started_at", "closed_at", "current_status_at",
         ] {
             assert!(
@@ -174,6 +190,13 @@ mod tests {
         }
         assert!(json.contains(r#""tags":[]"#));
         assert!(json.contains(r#""deps":[]"#));
+        assert!(!json.contains(r#""body""#), "тела не просили — поля нет: {json}");
+
+        // А когда тело просили, оно на месте и у ПУСТОГО тела тоже: иначе
+        // «тикет без описания» и «описание не запрашивали» снова сливаются.
+        let with_body = Ticket { body: Some(String::new()), ..empty };
+        let json = serde_json::to_string(&with_body).unwrap();
+        assert!(json.contains(r#""body":"""#), "пустое тело должно остаться видимым: {json}");
     }
 
     #[test]

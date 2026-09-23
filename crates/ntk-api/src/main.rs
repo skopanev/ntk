@@ -268,6 +268,15 @@ struct TicketsQuery {
     /// мегабайтов, а не ответ на вопрос «сколько всего».
     #[serde(default)]
     count: bool,
+    /// Отдать ТЕЛА тикетов. По умолчанию нет.
+    ///
+    /// Замер на живом воркспейсе: тело тянет около 2600 знаков, и страница по
+    /// умолчанию в пятьдесят тикетов отдавала около ста тридцати тысяч — при
+    /// разрешённом потолке в пятьсот выходило за миллион, то есть за пределы
+    /// любого контекста. Список отвечает на вопрос «что есть», тело читают у
+    /// одного тикета через ntk_show.
+    #[serde(default)]
+    body: bool,
     /// Только те, что стоят в текущем статусе дольше N дней.
     ///
     /// Отвечает на вопрос, на который до сих пор ответить было нечем: какая
@@ -376,7 +385,7 @@ pub(crate) async fn ticket_one(
         module: r.get(8),
         tags: r.get(9),
         deps,
-        body: r.get(10),
+        body: Some(r.get::<_, Option<String>>(10).unwrap_or_default()),
         due: r.get(11),
         created_at: r.get(12),
         updated_at: r.get(13),
@@ -581,13 +590,18 @@ pub(crate) async fn tickets(
     // Замерено на 5340 тикетах: последовательный скан всей таблицы, 4179 строк
     // на каждый список. При росте это линейно дороже.
     let head = if q.count {
-        "select count(*)"
+        "select count(*)".to_string()
     } else {
-        "select id, uuid::text, title, status, priority, type, assignee,
-                project_id, module, tags, body,
-                created_at::text, updated_at::text,
-                started_at::text, closed_at::text, current_status_at::text,
-                due::text"
+        // Тело не читается из базы, когда его не просили: на пятистах строках
+        // это мегабайты, поднятые с диска, чтобы тут же быть выброшенными.
+        format!(
+            "select id, uuid::text, title, status, priority, type, assignee,
+                    project_id, module, tags, {},
+                    created_at::text, updated_at::text,
+                    started_at::text, closed_at::text, current_status_at::text,
+                    due::text",
+            if q.body { "body" } else { "null::text as body" }
+        )
     };
     let mut sql = format!("{head} from tickets where deleted_at is null");
     let mut args: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -672,7 +686,13 @@ pub(crate) async fn tickets(
         return (StatusCode::OK, Json(serde_json::json!({ "count": n }))).into_response();
     }
 
-    args.push(&limit);
+    // Спрашиваем на одну строку БОЛЬШЕ запрошенного. Лишняя не отдаётся —
+    // она только отвечает на вопрос «это всё?», который иначе стоил бы
+    // второго прохода по таблице. Пятьдесят строк из пяти тысяч выглядят
+    // точно так же, как пятьдесят из пятидесяти, и молча обрезанный список
+    // читается как полный.
+    let probe = limit + 1;
+    args.push(&probe);
     sql.push_str(&format!(" order by created_at desc limit ${}", args.len()));
     args.push(&offset);
     sql.push_str(&format!(" offset ${}", args.len()));
@@ -744,7 +764,29 @@ pub(crate) async fn tickets(
     };
 
     match out {
-        Ok(tickets) => (StatusCode::OK, Json(json!({"tickets": tickets}))).into_response(),
+        Ok(mut tickets) => {
+            let more = tickets.len() as i64 > limit;
+            tickets.truncate(limit as usize);
+            let next = more.then(|| offset + limit);
+            let mut body = json!({
+                "tickets": tickets,
+                "truncated": more,
+                "next_offset": next,
+            });
+            if !q.body {
+                // Пропуск объявлен, а не подразумевается: иначе отсутствие
+                // тела читается как «тикет пустой».
+                body["bodies_omitted"] = json!(true);
+                body["reading"] = json!("Bodies are omitted. Pass body=true for this page, or read one ticket with ntk_show.");
+            }
+            if more {
+                body["reading_more"] = json!(format!(
+                    "More match this filter. Repeat with offset={} for the next page, or narrow the filter. ntk_ls with count=true gives the total.",
+                    offset + limit
+                ));
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "запрос тикетов не прошёл");
             err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")

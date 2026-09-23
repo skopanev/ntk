@@ -17,7 +17,6 @@ pub struct AttachArgs {
     pub content_type: Option<String>,
     pub content: Option<String>,
     pub content_base64: Option<String>,
-    pub path: Option<String>,
 }
 
 impl AttachArgs {
@@ -28,18 +27,19 @@ impl AttachArgs {
         if self.filename.trim().is_empty() || self.filename.chars().count() > 256 {
             return Err("filename must contain 1 to 256 characters".into());
         }
-        let sources = [
-            self.content.is_some(),
-            self.content_base64.is_some(),
-            self.path.is_some(),
-        ];
+        // Путь на диске источником больше не бывает: локального stdio-клиента
+        // нет с 21.09.2026, а сервер на другой машине и никогда не мог
+        // прочитать файл у вызывающего. Поле убрано, а не оставлено
+        // отказывающим: объявленный аргумент — это обещание, и модель тратит
+        // на него попытку.
+        let sources = [self.content.is_some(), self.content_base64.is_some()];
         if sources.into_iter().filter(|v| *v).count() != 1 {
-            return Err("provide exactly one of content, content_base64 or path".into());
+            return Err("provide exactly one of content or content_base64".into());
         }
         Ok(())
     }
 
-    /// Remote MCP never interprets paths on the server's filesystem.
+    /// MCP never interprets paths on anyone's filesystem.
     pub fn inline_bytes(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
         let bytes = if let Some(content) = &self.content {
@@ -53,7 +53,7 @@ impl AttachArgs {
                 .decode(encoded)
                 .map_err(|_| "content_base64 must be standard padded base64")?
         } else {
-            return Err("path is available only in local stdio MCP; send content or content_base64 to remote MCP".into());
+            return Err("send content or content_base64".into());
         };
         check_size(bytes.len())?;
         Ok(bytes)

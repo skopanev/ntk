@@ -72,12 +72,9 @@ const DATE_DESC: &str = "Filter by date, as a comma-separated list of field:op:v
 pub struct Tool {
     /// The MCP name: `ntk_create`.
     pub name: &'static str,
-    /// The terminal command: `create`. Empty when there is no command.
-    pub cli: &'static str,
     /// Human-readable name for `annotations.title`.
     pub title: &'static str,
     /// One line: `ntk --help` and short hints.
-    pub about: &'static str,
     /// The full description: MCP and `ntk <cmd> --help`.
     pub desc: &'static str,
     pub read_only: bool,
@@ -148,6 +145,11 @@ impl Tool {
     pub fn manifest(&self) -> Value {
         json!({
             "name": self.name,
+            // Человекочитаемое имя стоит и наверху, и в аннотациях. Спека с
+            // 2025-06-18 читает верхнее первым, а прежние клиенты знают только
+            // аннотацию; одно поле вместо двух означало бы, что в половине
+            // клиентов вместо названия видно ntk_ls.
+            "title": self.title,
             "annotations": self.annotations(),
             "description": self.desc,
             "inputSchema": self.input_schema(),
@@ -163,10 +165,6 @@ pub fn get(name: &str) -> Option<&'static Tool> {
     ALL.iter().find(|t| t.name == name)
 }
 
-/// Look a tool up by its terminal command.
-pub fn by_cli(cli: &str) -> Option<&'static Tool> {
-    ALL.iter().find(|t| !t.cli.is_empty() && t.cli == cli)
-}
 
 /// The whole list for `tools/list`.
 pub fn manifest() -> Value {
@@ -177,11 +175,6 @@ pub fn manifest() -> Value {
 
 const WS: Field =
     Field::req("workspace", Ty::Str, "Workspace. Required: there is no default.");
-const WS_OPT: Field = Field::opt(
-    "workspace",
-    Ty::Str,
-    "Workspace. Taken from .ntkrc when omitted; nothing is guessed.",
-);
 const ID: Field =
     Field::req("id", Ty::Str, "Identifier, proj-xxxxxxxxxx. Case does not matter.");
 const FORCE: Field = Field::opt(
@@ -231,9 +224,7 @@ pub const ALL: &[Tool] = &[
     attachments::LIST,
     Tool {
         name: "ntk_whoami",
-        cli: "whoami",
         title: "Who am I",
-        about: "Who you are and which workspaces you can reach.",
         desc: "Who you are and which workspaces you can reach. Call this FIRST if you do not know which workspace to pass: every other tool requires it and there is no default.",
         read_only: true,
         destructive: false,
@@ -242,18 +233,17 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_ls",
-        cli: "ls",
         title: "List tickets",
-        about: "List tickets. Yours only by default.",
-        desc: "List the workspace's tickets. Yours only by default; all=true shows everyone's. Paged: limit and offset.",
+        desc: "List the workspace's tickets. Yours only by default; all=true shows everyone's. WITHOUT BODIES: the answer carries identifiers, titles, status, tags and dates, and a body only when body=true — a page of fifty with bodies runs to about a hundred and thirty thousand characters, and the allowed five hundred to over a million. Read one ticket's body with ntk_show. Paged with limit and offset; the answer says truncated and next_offset when more match, so a full-looking page is never silently a first page.",
         read_only: true,
         destructive: false,
         idempotent: true,
         fields: &[
             WS,
             STATUS_PICK,
-            Field::opt("limit", Ty::Int, "50 by default, 500 at most."),
-            Field::opt("offset", Ty::Int, "Skip the first N — the next page."),
+            Field::opt("limit", Ty::Int, "50 by default, 500 at most. The answer carries truncated and next_offset: do not guess whether a full page is the whole answer."),
+            Field::opt("offset", Ty::Int, "Skip the first N — the next page. Take it from next_offset rather than counting by hand. The list is ordered newest first, so a ticket filed between two pages shifts the window: for an exact sweep, narrow by date instead of paging a moving list."),
+            Field::opt("body", Ty::Bool, "Also return each ticket's body. Off by default, and deliberately: bodies are what makes a list unreadable — about 2600 characters each on a live workspace. Ask for them only when you are about to READ them, and prefer ntk_show for one ticket."),
             ALL_ONES,
             TAG,
             STRICT,
@@ -268,9 +258,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_walk",
-        cli: "walk",
         title: "Walk tickets for review",
-        about: "Walk tickets one by one for review. Changes nothing.",
         desc: "Walk tickets one by one for review: returns the next one not yet shown under this filter and changes NOTHING on the ticket. Not to be confused with ntk_next, which takes a ticket INTO WORK — walking thirty tickets that way would assign all thirty to you, wrecking the queue. Invent walk_id once and pass the same one at every step; separate sessions walk independently.",
         read_only: false,
         destructive: false,
@@ -292,9 +280,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_show",
-        cli: "show",
         title: "Show ticket",
-        about: "Show the whole ticket: fields, body, dependencies.",
         desc: "The whole ticket: fields, body, dependencies, who holds it and what it waits for.",
         read_only: true,
         destructive: false,
@@ -303,9 +289,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_next",
-        cli: "next",
         title: "Take a free ticket",
-        about: "Take the next free ticket into work.",
         desc: "Take the next free ticket into work. The claim is atomic: one ticket will not go to two agents. The queue raises blockers of started work by itself — do not assemble that choice by hand out of ntk_ls and ntk_deps.",
         read_only: false,
         destructive: false,
@@ -324,9 +308,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_start",
-        cli: "start",
         title: "Take a ticket into work",
-        about: "Take a named ticket into work.",
         desc: "Take a NAMED ticket into work. If someone already took it, you get a refusal carrying the current status, not silence. THE DEPENDENCY GUARD APPLIES HERE TOO: a ticket waiting on unfinished work is refused, and there is no flag that lifts it — naming the ticket outright is not a way around the queue. ntk_deps shows what is holding it.",
         read_only: false,
         destructive: false,
@@ -335,9 +317,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_create",
-        cli: "create",
         title: "Create ticket",
-        about: "Create a ticket.",
         desc: "Create a ticket. The server assigns the identifier. Where vectorisation is switched on, this first looks for tickets that already say the same thing and REFUSES if it finds one, listing what it found; pass skip_search=true to file anyway. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment using ntk_attach. Write tickets in English.",
         read_only: false,
         destructive: false,
@@ -359,9 +339,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_update",
-        cli: "update",
         title: "Change ticket",
-        about: "Change a ticket: status, title, body, assignee, tags.",
         desc: "Change a ticket in ONE call: status, title, body, assignee and tags together, applied in one transaction — the ticket is never seen half-changed. A ticket outside the todo group is already picked up by someone and needs force. LIMITS: title 256 characters, body 2000. Overflow is refused WHOLE, never truncated: split it into several tickets, write tighter, or carry the bulk in an attachment using ntk_attach. Write tickets in English.",
         read_only: false,
         destructive: true,
@@ -387,9 +365,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_close",
-        cli: "close",
         title: "Close ticket",
-        about: "Close a ticket: move it to done.",
         desc: "Close a ticket — move it to done. The closing date is set by the transition; it cannot be set by hand. Describe what was done via ntk_update BEFORE closing: without that the close is pointless, because the next reader will not know how it ended.",
         read_only: false,
         destructive: false,
@@ -398,9 +374,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_tag",
-        cli: "tag",
         title: "Edit tags",
-        about: "Edit a ticket's tags.",
         desc: "Tags only, nothing else. If you are changing anything besides tags, use ntk_update — it does everything in one call. Every edit carries a sign: [\"+alpha\",\"-legacy\"]. The sign is required.",
         read_only: false,
         destructive: true,
@@ -414,9 +388,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_deps",
-        cli: "deps",
         title: "Dependencies",
-        about: "A ticket's dependencies: what it stands on and what stands on it.",
         desc: "A ticket's dependencies: what it stands on and what stands on it.",
         read_only: true,
         destructive: false,
@@ -425,9 +397,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_rm",
-        cli: "rm",
         title: "Remove ticket",
-        about: "Remove a ticket.",
         desc: "Remove a ticket: it stops showing up but is not erased. A real delete would quietly free everyone who was waiting on it.",
         read_only: false,
         destructive: true,
@@ -436,9 +406,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_restore",
-        cli: "restore",
         title: "Restore ticket",
-        about: "Bring back a removed ticket.",
         desc: "Bring back a removed ticket under its OWN id, with body, tags, status and dependencies intact. Removal only marks the ticket, so nothing was lost and nothing is recreated: the same row comes back, and links from commits and other tickets keep working. Search finds it again too. Refuses a ticket that was never removed, so a typo in the id cannot pass as success.",
         read_only: false,
         destructive: false,
@@ -447,9 +415,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_meta",
-        cli: "meta",
         title: "Workspace directories",
-        about: "What the workspace has: statuses, priorities, projects, people.",
         desc: "What the workspace has: statuses and their groups, priorities, projects, people. Replaces the former schema, users, projects and workspaces calls.",
         read_only: true,
         destructive: false,
@@ -458,9 +424,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_find",
-        cli: "find",
         title: "Find similar tickets",
-        about: "Find tickets that already say the same thing.",
         desc: "Find tickets whose text is close to the one given, so the same work is not filed twice. Searches EVERY status and EVERYONE's tickets by default, closed ones included; narrow it with status, tag, assignee, project or module — the same filters ntk_ls takes, understood the same way. Only available where vectorisation is switched on; without it the answer is a refusal, not an empty list — an empty list would read as \"nothing like it exists\". Every hit is checked against the database before it is returned, so a ticket that was removed or rewritten cannot come back through a stale vector. Ranked by closeness, closest first.",
         read_only: true,
         destructive: false,
@@ -483,9 +447,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_project_move",
-        cli: "projects",
         title: "Move a project's tickets",
-        about: "Move every ticket of one project into another, in one transaction.",
         desc: "Move EVERY ticket of one project into another, in a single transaction: either all of them arrive or none do. Take this when two project names turned out to be the same thing — a spelling that drifted, or a second name for one repository — and the work has to end up in one list. Changing the project on tickets one at a time is a different operation: on fifty tickets that is fifty windows in which the set can be left split across both names. Two things do NOT change, and both matter. Identifiers keep the OLD prefix: a ticket filed under the old name still reads that way, and nothing about that is broken. And a module must already be registered in the target for every module the moved tickets reference — otherwise the move is refused up front, naming the missing ones, rather than failing halfway. Retiring the emptied name is a separate step on purpose: moving and retiring in one act would hide which of the two failed.",
         read_only: false,
         destructive: true,
@@ -498,9 +460,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_modules",
-        cli: "modules",
         title: "Project modules",
-        about: "Project modules.",
         desc: "Project modules, live ones only. An archived module cannot be chosen for new work, so it is left out by default; ask for include_archived when you need to know a name is taken rather than free.",
         read_only: true,
         destructive: false,
@@ -513,9 +473,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_modules_add",
-        cli: "modules-add",
         title: "Add modules",
-        about: "Add project modules without touching the rest of the registry.",
         desc: "Add modules to a project WITHOUT touching the rest of the registry: nothing leaves the live set. Take this instead of replace when you only need to add names.",
         read_only: false,
         destructive: false,
@@ -528,9 +486,7 @@ pub const ALL: &[Tool] = &[
     },
     Tool {
         name: "ntk_modules_replace",
-        cli: "modules-replace",
         title: "Replace modules",
-        about: "Replace a project's module list as a whole.",
         desc: "Replace a project's module list as a whole. The list is taken as COMPLETE: a module missing from it leaves the live set — into the archive if tickets reference it, and for good if none do. An archived module that returns to the list becomes live again. To drop one module, send all the others, not that one. An empty list is refused: it would wipe the project's whole registry.",
         read_only: false,
         destructive: true,
@@ -543,48 +499,10 @@ pub const ALL: &[Tool] = &[
     },
 ];
 
-/// The workspace field for terminal commands: there it comes from `.ntkrc`.
-pub const CLI_WORKSPACE: &Field = &WS_OPT;
 
-/// Short description for `ntk --help`.
-///
-/// Panics on an unknown name on purpose: these names are literals in the
-/// argument parser, so a typo is a build error in spirit, not an empty hint in
-/// somebody's terminal. The parser is built at startup, so it fails on the very
-/// first run rather than in the middle of someone's work.
-pub fn about(name: &str) -> &'static str {
-    get(name).unwrap_or_else(|| panic!("{name} нет в каталоге инструментов")).about
-}
 
-/// Full description for `ntk <command> --help`.
-pub fn desc(name: &str) -> &'static str {
-    get(name).unwrap_or_else(|| panic!("{name} нет в каталоге инструментов")).desc
-}
 
-/// Help text for one argument, for `ntk <command> --help`.
-///
-/// Panics on an unknown name on purpose: these names are literals in the
-/// argument parser, so a typo is a build error in spirit, not an empty hint in
-/// somebody's terminal. The parser is built at startup, so it fails on the very
-/// first run rather than in the middle of someone's work.
-pub fn arg(tool: &str, field: &str) -> &'static str {
-    get(tool)
-        .unwrap_or_else(|| panic!("no tool {tool} in the catalogue"))
-        .field(field)
-        .unwrap_or_else(|| panic!("no field {tool}.{field} in the catalogue"))
-        .desc
-}
 
-/// Help for the `modules` command: in the terminal three tools are folded into
-/// one command with flags, so the text is joined from three descriptions.
-pub fn modules_help() -> String {
-    format!(
-        "{}\n\n--add: {}\n\n--replace: {}",
-        desc("ntk_modules"),
-        desc("ntk_modules_add"),
-        desc("ntk_modules_replace")
-    )
-}
 
 #[cfg(test)]
 mod tests {
@@ -595,14 +513,15 @@ mod tests {
         for t in ALL {
             assert!(t.name.starts_with("ntk_"), "{}", t.name);
             assert!(!t.title.is_empty(), "{}", t.name);
-            assert!(!t.about.is_empty(), "{}", t.name);
             assert!(!t.desc.is_empty(), "{}", t.name);
-            assert!(!t.about.contains('\n'), "{}: the short description must be one line", t.name);
+            // Название показывают в списке инструментов, где на него отведена
+            // строка, а не абзац.
+            assert!(!t.title.contains('\n'), "{}: the title must be one line", t.name);
             assert!(
-                t.about.chars().count() <= 80,
-                "{}: the short description will not fit the --help column ({})",
+                t.title.chars().count() <= 80,
+                "{}: the title is too long for a list ({})",
                 t.name,
-                t.about.chars().count()
+                t.title.chars().count()
             );
         }
     }
@@ -615,13 +534,11 @@ mod tests {
         let cyrillic = |s: &str| s.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c));
         for t in ALL {
             assert!(!cyrillic(t.title), "{}: title is in Russian", t.name);
-            assert!(!cyrillic(t.about), "{}: about is in Russian", t.name);
             assert!(!cyrillic(t.desc), "{}: desc is in Russian", t.name);
             for f in t.fields {
                 assert!(!cyrillic(f.desc), "{}.{}: description is in Russian", t.name, f.name);
             }
         }
-        assert!(!cyrillic(CLI_WORKSPACE.desc));
     }
 
     /// A field with no description is an unnamed parameter: the client sees a
@@ -635,15 +552,13 @@ mod tests {
         }
     }
 
+    /// Имя инструмента — это адрес вызова: два одинаковых означают, что один
+    /// из них недостижим, а какой именно — решит порядок в списке.
     #[test]
-    fn names_and_cli_names_are_unique() {
+    fn names_are_unique() {
         let mut seen = std::collections::HashSet::new();
         for t in ALL {
             assert!(seen.insert(t.name), "{} listed twice", t.name);
-        }
-        let mut cli = std::collections::HashSet::new();
-        for t in ALL.iter().filter(|t| !t.cli.is_empty()) {
-            assert!(cli.insert(t.cli), "{} listed twice", t.cli);
         }
     }
 

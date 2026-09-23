@@ -242,7 +242,7 @@ pub async fn step(
         module: r.get(8),
         tags: r.get(9),
         deps: Vec::new(),
-        body: r.get(10),
+        body: Some(r.get::<_, Option<String>>(10).unwrap_or_default()),
         due: None,
         created_at: r.get(11),
         updated_at: r.get(12),

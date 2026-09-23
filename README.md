@@ -83,6 +83,7 @@ not the reference.
 ntk_create   workspace=test  project=ntk  title="Fix the auth flow"  priority=high  tags=backend
 ntk_update   workspace=test  id=tst-1     status=to_review  append="progress note"
 ntk_ls       workspace=test  status=in_progress  tag=infra
+ntk_ls       workspace=test  id-title-status only; add body=true for bodies
 ```
 
 `tags` on `ntk_update` takes signed values — `+add`, `-remove`. Unsigned is
@@ -90,17 +91,16 @@ rejected, so that "add" never turns out to have meant "replace everything".
 
 ## MCP attachments
 
-Both local stdio and remote HTTP MCP expose `ntk_attach` and `ntk_attachments`.
+HTTP MCP exposes `ntk_attach` and `ntk_attachments`.
 Attach a document in one call; no tracker URL or browser form is needed:
 
 ```json
 {"name":"ntk_attach","arguments":{"workspace":"test","id":"ntk-xxxxxxxxxx","filename":"research.md","content_type":"text/markdown","content":"# Findings\nDetails go here."}}
 ```
 
-Provide exactly one source: `content` for UTF-8 text, `content_base64` for
-binary files (standard padded base64), or `path` for an absolute file path on
-the **local stdio MCP machine**. Remote HTTP MCP accepts contents, never local
-paths. Files must contain 1 byte to 50 MiB; the remote JSON request limit is
+Provide exactly one source: `content` for UTF-8 text or `content_base64` for
+binary files (standard padded base64). A path on your disk is not an argument:
+the server is on another machine and cannot read it. Files must contain 1 byte to 50 MiB; the remote JSON request limit is
 about 68 MiB. Upload success is returned only after storage verification and
 attachment registration. Repeating an upload creates another attachment, so
 after an uncertain response, list attachments before retrying.

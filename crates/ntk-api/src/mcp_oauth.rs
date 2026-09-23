@@ -321,7 +321,7 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
         return bad("temporarily_unavailable", "the database is unavailable");
     };
 
-    let (client_id, user_id, resource, scope) = match f.grant_type.as_str() {
+    let (client_id, user_id, resource, scope, family) = match f.grant_type.as_str() {
         "authorization_code" => {
             let (Some(code), Some(verifier)) = (f.code.as_ref(), f.code_verifier.as_ref()) else {
                 return bad("invalid_request", "code and code_verifier are required");
@@ -353,24 +353,64 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
             if expect != challenge {
                 return bad("invalid_grant", "the PKCE check failed");
             }
-            (cid, uid, r.get::<_, Option<String>>(4), r.get::<_, Option<String>>(5))
+            // Новый вход — новая семья. Её имя не выводится из токена: токен
+            // в базе живёт хешем, а имя семьи попадает в каждую строку цепочки.
+            (cid, uid, r.get::<_, Option<String>>(4), r.get::<_, Option<String>>(5), rnd(32))
         }
         "refresh_token" => {
             let Some(rt) = f.refresh_token.as_ref() else {
                 return bad("invalid_request", "a refresh_token is required");
             };
+            // Токен ГАСИТСЯ тем же запросом, который его читает: между
+            // «прочитал» и «пометил использованным» нет окна, в которое
+            // пролезал бы второй обмен тем же токеном.
             let row = c
                 .query_opt(
-                    "select client_id, user_id, resource from core.oauth_tokens
+                    "update core.oauth_tokens set revoked_at = now()
                       where token_hash = $1 and kind = 'refresh' and revoked_at is null
-                        and (expires_at is null or expires_at > now())",
+                        and (expires_at is null or expires_at > now())
+                      returning client_id, user_id, resource, family",
                     &[&hash(rt)],
                 )
                 .await;
             let Ok(Some(r)) = row else {
+                // Не подошёл — возможно, он уже потрачен. Потраченный токен,
+                // предъявленный второй раз, означает, что копия есть у двоих;
+                // кто из них владелец, сервер не знает. Гасим всю цепочку,
+                // включая только что выданный: войти заново сможет только тот,
+                // у кого есть учётная запись.
+                //
+                // Кроме первых тридцати секунд. Повтор в этом окне — почти
+                // всегда одна и та же отправка дважды: оборвалась сеть, клиент
+                // послал снова. Ответ ему всё равно отказ (тот обмен уже
+                // состоялся, и новый токен у него есть), но отбирать доступ у
+                // честного клиента за потерянный пакет нельзя — иначе первая
+                // же плохая связь выкидывает агента из системы, и выглядит это
+                // как поломка сервера, а не как защита.
+                let reused = c
+                    .execute(
+                        "update core.oauth_tokens set revoked_at = now()
+                          where revoked_at is null and family = (
+                              select family from core.oauth_tokens
+                               where token_hash = $1
+                                 and revoked_at < now() - interval '30 seconds')",
+                        &[&hash(rt)],
+                    )
+                    .await;
+                if let Ok(n) = reused {
+                    if n > 0 {
+                        tracing::warn!(revoked = n, "mcp oauth: повторное использование refresh — цепочка погашена");
+                    }
+                }
                 return bad("invalid_grant", "unknown or revoked refresh_token");
             };
-            (r.get(0), r.get(1), r.get::<_, Option<String>>(2), None)
+            (
+                r.get(0),
+                r.get(1),
+                r.get::<_, Option<String>>(2),
+                None,
+                r.get::<_, Option<String>>(3).unwrap_or_else(|| rnd(32)),
+            )
         }
         other => return bad("unsupported_grant_type", &format!("{other} is not supported")),
     };
@@ -381,15 +421,15 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
     let put = async {
         let tx = c.transaction().await?;
         tx.execute(
-            "insert into core.oauth_tokens (token_hash, client_id, user_id, kind, resource, expires_at)
-             values ($1, $2, $3, 'access', $4, now() + make_interval(secs => $5::float8))",
-            &[&hash(&access), &client_id, &user_id, &resource, &(TTL_SEC as f64)],
+            "insert into core.oauth_tokens (token_hash, client_id, user_id, kind, resource, family, expires_at)
+             values ($1, $2, $3, 'access', $4, $5, now() + make_interval(secs => $6::float8))",
+            &[&hash(&access), &client_id, &user_id, &resource, &family, &(TTL_SEC as f64)],
         )
         .await?;
         tx.execute(
-            "insert into core.oauth_tokens (token_hash, client_id, user_id, kind, resource, expires_at)
-             values ($1, $2, $3, 'refresh', $4, now() + interval '30 days')",
-            &[&hash(&refresh), &client_id, &user_id, &resource],
+            "insert into core.oauth_tokens (token_hash, client_id, user_id, kind, resource, family, expires_at)
+             values ($1, $2, $3, 'refresh', $4, $5, now() + interval '30 days')",
+            &[&hash(&refresh), &client_id, &user_id, &resource, &family],
         )
         .await?;
         tx.commit().await?;
