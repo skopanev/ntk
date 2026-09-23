@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "ntk-api"
-version = "0.5.78"
+version = "0.5.79"
 dependencies = [
  "anyhow",
  "axum",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "ntk-core"
-version = "0.5.78"
+version = "0.5.79"
 dependencies = [
  "base64",
  "schemars",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "ntk-migrate"
-version = "0.5.78"
+version = "0.5.79"
 dependencies = [
  "anyhow",
  "tokio",

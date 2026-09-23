@@ -163,6 +163,29 @@ pub struct AuthorizeQuery {
     resource: Option<String>,
 }
 
+/// Приводим присланный отпечаток к тому виду, в котором его считает RFC.
+///
+/// RFC 7636 требует base64url без паддинга, но так шлют не все. Antigravity
+/// кодирует ОБЫЧНЫМ base64 — с `+` и `/`, — а `+` в строке запроса означает
+/// пробел, и разбор превращает его именно в пробел. Отпечаток приезжал длиной
+/// 44 знака с пробелом внутри и, разумеется, не сходился ни с чем: проверка
+/// падала с «the PKCE check failed», и выглядело это как поломка входа.
+/// Замерено на боевом: у локальных клиентов ровно 43 знака и чистый алфавит,
+/// у antigravity.google — 44 и пробел на 24-й позиции.
+///
+/// Снисходительность здесь уместна ровно потому, что ничего не ослабляет:
+/// пробел восстанавливается в `+`, стандартный алфавит переводится в
+/// url-безопасный, паддинг отбрасывается. Корректный отпечаток проходит
+/// насквозь неизменным, а неверный верификатор по-прежнему не сойдётся.
+fn normalize_challenge(raw: &str) -> String {
+    raw.trim()
+        .replace(' ', "+")
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_string()
+}
+
 /// Step 1: the client sent a person. We check the client and hand the person to Google.
 pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQuery>) -> Response {
     if q.response_type != "code" {
@@ -175,6 +198,7 @@ pub async fn authorize(State(app): State<Arc<App>>, Query(q): Query<AuthorizeQue
     if method != "S256" {
         return bad("invalid_request", "code_challenge_method must be S256");
     }
+    let challenge = &normalize_challenge(challenge);
     let Ok(c) = app.pool.get().await else {
         return bad("temporarily_unavailable", "the database is unavailable");
     };
@@ -351,7 +375,28 @@ pub async fn token(State(app): State<Arc<App>>, Form(f): Form<TokenForm>) -> Res
             // S256: base64url(sha256(verifier)) without padding.
             let expect = base64_url(&Sha256::digest(verifier.as_bytes()));
             if expect != challenge {
-                return bad("invalid_grant", "the PKCE check failed");
+                // Отказ объясняется в журнале, а не только клиенту.
+                //
+                // Сам проверяющий не может сказать, чья это ошибка: наша
+                // арифметика, подменённый код или человек, вставивший код от
+                // прошлой попытки. Поэтому в журнал идёт то, по чему это
+                // различимо: длина верификатора (RFC требует 43-128 знаков —
+                // обрезанная вставка видна сразу) и оба отпечатка усечёнными.
+                // Верификатор целиком не пишем: пока код не сгорел, это
+                // половина ключа от чужой сессии, а журналы читают многие.
+                tracing::warn!(
+                    client = %cid,
+                    verifier_len = verifier.chars().count(),
+                    expected = %expect.chars().take(10).collect::<String>(),
+                    stored = %challenge.chars().take(10).collect::<String>(),
+                    "mcp oauth: PKCE не сошёлся"
+                );
+                return bad(
+                    "invalid_grant",
+                    "the PKCE check failed: this code does not belong to the sign-in \
+                     your client started. Start authentication again and paste the code \
+                     from THAT attempt; a code from an earlier attempt never matches.",
+                );
             }
             // Новый вход — новая семья. Её имя не выводится из токена: токен
             // в базе живёт хешем, а имя семьи попадает в каждую строку цепочки.
@@ -484,6 +529,49 @@ pub fn unauthorized(base: &str, detail: &str) -> Response {
         Json(json!({"error": "invalid_token", "error_description": format!("{detail}. {AUTH_HELP}")})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod pkce_tests {
+    use super::*;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    /// Правильный отпечаток проходит насквозь неизменным: снисходительность
+    /// не должна трогать тех, кто и так делает по стандарту.
+    #[test]
+    fn a_correct_challenge_is_left_alone() {
+        let verifier = "a".repeat(43);
+        let canonical = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.as_bytes()));
+        assert_eq!(normalize_challenge(&canonical), canonical);
+    }
+
+    /// Antigravity кодирует обычным base64, а `+` в строке запроса — это
+    /// пробел. Отпечаток приезжал с пробелом внутри и не сходился ни с чем;
+    /// проверка падала с «the PKCE check failed», и выглядело это как поломка
+    /// входа. Здесь воспроизведён именно этот путь: стандартный алфавит,
+    /// паддинг, и `+`, побывавший пробелом.
+    #[test]
+    fn standard_base64_survives_the_trip_through_a_query_string() {
+        // Верификатор подобран так, что в стандартном base64 его отпечаток
+        // содержит `+` — иначе испытание проверяло бы ничего.
+        let verifier = (0..200)
+            .map(|n| format!("verifier-{n}-{}", "x".repeat(30)))
+            .find(|v| {
+                base64::engine::general_purpose::STANDARD
+                    .encode(Sha256::digest(v.as_bytes()))
+                    .contains('+')
+            })
+            .expect("no verifier produced a + in its digest");
+        let canonical = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.as_bytes()));
+        let as_sent = base64::engine::general_purpose::STANDARD
+            .encode(Sha256::digest(verifier.as_bytes()))
+            .replace('+', " ");
+        assert_ne!(as_sent, canonical, "испытание должно начинаться с расхождения");
+        assert_eq!(normalize_challenge(&as_sent), canonical);
+    }
 }
 
 #[cfg(test)]
