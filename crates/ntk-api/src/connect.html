@@ -1,0 +1,142 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Подключение к NTK</title>
+<style>
+:root{color-scheme:light dark;--ink:#1d2220;--muted:#6a736e;--line:#dfe4e0;--bg:#fbfcfa;--card:#fff;--accent:#1f5d4c;--warn:#8a5a1c;--warnbg:#fdf6e9}
+@media(prefers-color-scheme:dark){:root{--ink:#e6eae7;--muted:#98a29c;--line:#2c332f;--bg:#141816;--card:#1a201d;--accent:#7bc3a8;--warn:#d7a95c;--warnbg:#2a2318}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:3rem 1.25rem 5rem}
+h1{font-size:1.75rem;line-height:1.25;margin:0 0 .35rem}
+h2{font-size:1.15rem;margin:2.75rem 0 .6rem;padding-top:1.5rem;border-top:1px solid var(--line)}
+h3{font-size:.95rem;margin:1.5rem 0 .4rem;color:var(--muted);font-weight:650}
+.lede{color:var(--muted);margin:0 0 2rem}
+p{margin:.7rem 0}
+ol{padding-left:1.2rem}
+ol>li{margin:.5rem 0}
+code{font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.85rem 1rem;overflow-x:auto;margin:.6rem 0}
+pre code{background:none;border:0;padding:0;font-size:13px}
+.note{background:var(--warnbg);border-left:3px solid var(--warn);border-radius:0 8px 8px 0;padding:.7rem 1rem;margin:1rem 0}
+.note strong{color:var(--warn)}
+.step{font-variant-numeric:tabular-nums}
+footer{margin-top:3rem;padding-top:1.25rem;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+a{color:var(--accent)}
+.changes li{margin:.65rem 0}
+</style>
+<main>
+
+<h1>Подключение к NTK</h1>
+<p class="lede">Локальный stdio-клиент удалён 21.09.2026. Клиенты ходят на HTTP MCP сами.</p>
+
+<p>Он никогда не был второй реализацией: открывал MCP на stdio и пересылал вызовы на этот же
+сервис. Посредник означал вторую поверхность, которую надо держать в паритете, вторую сборку,
+вторую вещь, установленную на машинах, и второй способ отстать от сервера.</p>
+
+<div class="note"><strong>Установленный бинарник продолжит работать до переустановки.</strong>
+Это не значит, что он в порядке: он ходит на тот же сервер, но его набор инструментов заморожен
+на дне удаления и с сервером расходится.</div>
+
+<h2><span class="step">1.</span> Заменить подключение</h2>
+
+<p>Имя сервера оставьте прежним — <code>ntk</code>. Меняется только то, как клиент до него
+добирается. Признак старой записи: в ней есть <code>"command": "ntk"</code> (или абсолютный путь
+к бинарнику) и <code>"args": ["mcp"]</code>.</p>
+
+<h3>Claude Code</h3>
+<pre><code>claude mcp remove --scope user ntk
+claude mcp add --transport http --scope user ntk __URL__/mcp-claude</code></pre>
+
+<p>Если старая запись была в project- или local-scope, заменяйте в том же scope: старая проектная
+запись перекрывает новую глобальную, и вы получите старое поведение, ничего не заметив.</p>
+
+<h3>Claude или agy, конфигурация JSON</h3>
+<p>Замените только объект <code>ntk</code> внутри <code>mcpServers</code>:</p>
+<pre><code>"ntk": {
+  "type": "http",
+  "url": "__URL__/mcp-claude"
+}</code></pre>
+
+<h3>Codex</h3>
+<p>Замените блок <code>[mcp_servers.ntk]</code> в активном <code>config.toml</code>:</p>
+<pre><code>[mcp_servers.ntk]
+url = "__URL__/mcp-claude"</code></pre>
+
+<p>Уберите из старой записи <code>command</code>, <code>args</code> и переменные окружения, нужные
+только клиенту. Остальные MCP-серверы и прочие настройки не трогайте.</p>
+
+<h2><span class="step">2.</span> Перезапустить сессию клиента</h2>
+<p>Конфигурация читается на старте. Если клиент живёт в контейнере — нужна новая сессия
+контейнера.</p>
+
+<h2><span class="step">3.</span> Войти заново</h2>
+
+<div class="note">Сохранённый ключ старого клиента <strong>не превращается</strong> в OAuth-сессию
+HTTP-клиента. Это разные вещи.</div>
+
+<ol>
+<li><strong>Claude Code или agy:</strong> <code>/mcp</code> → <code>ntk</code> → Authenticate.</li>
+<li><strong>Codex CLI:</strong> <code>codex mcp login ntk</code> из терминала с той же
+конфигурацией Codex. После успеха перезапустите сессию Codex.</li>
+<li><strong>Codex app:</strong> настройки MCP-сервера → Authenticate.</li>
+</ol>
+
+<p>Входите рабочим Google-аккаунтом. Одна личность на человека: область доступа живёт на сервере,
+поэтому один вход покрывает все ваши воркспейсы.</p>
+
+<p>Ключи API руками никто не выдаёт, и OAuth через curl городить не надо. Если клиент просит
+ключ — вы не там.</p>
+
+<h2><span class="step">4.</span> Дожать вход в браузере</h2>
+
+<p>На странице NTK нажмите <strong>Copy sign-in link</strong> и вставьте ссылку <strong>целиком</strong>
+в ожидающий запрос клиента — вместе с <code>code</code> и <code>state</code>, не только код и не
+ссылку от прошлой попытки. Истёкшая попытка не чинится, она начинается заново.</p>
+
+<p>Клиентам без окна вставки нужен <strong>Return to app</strong> и доступный из браузера локальный
+callback. Codex ждёт именно локальный callback — в контейнере его надо пробросить наружу.</p>
+
+<h2><span class="step">5.</span> Проверить и снести бинарник</h2>
+
+<p>Убедитесь, что <code>ntk</code> подключён и показывает инструменты, и только потом удаляйте
+локальный исполняемый файл тем же способом, которым он ставился. Тикеты и доступы остаются на том
+же сервере — удаляется только посредник.</p>
+
+<p><code>.ntkrc</code> больше не читается ничем. Он привязывал каталог к воркспейсу для
+терминального клиента; клиента нет, воркспейс теперь едет в самом вызове. Файлы, оставшиеся в
+репозиториях, инертны.</p>
+
+<h2>Что изменилось в инструментах</h2>
+<p>Это увидят все, включая тех, кто уже на HTTP.</p>
+
+<ul class="changes">
+<li><strong><code>ntk_ls</code> больше не отдаёт тела тикетов.</strong> Замер: тело тянет около
+2600 знаков, страница по умолчанию в пятьдесят тикетов давала около ста тридцати тысяч, а при
+разрешённом потолке в пятьсот — за миллион, то есть за пределы любого контекста. Теперь в ответе
+идентификатор, заголовок, статус, теги, даты. Нужны тела — <code>body=true</code>. Одно тело —
+через <code>ntk_show</code>.</li>
+
+<li><strong>Ответ больше не молчит об усечении.</strong> Появились <code>truncated</code> и
+<code>next_offset</code>. Раньше пятьдесят строк из пяти тысяч выглядели ровно так же, как
+пятьдесят из пятидесяти, и полная страница читалась как весь ответ.</li>
+
+<li><strong>У <code>ntk_attach</code> убрано поле <code>path</code>.</strong> Оно обещало
+«локальный stdio MCP», которого больше нет. Отправляйте <code>content</code> для текста или
+<code>content_base64</code> для двоичных файлов: сервер на другой машине и путь на вашем диске
+прочитать не может.</li>
+
+<li><strong><code>ntk_restore</code> вернёт удалённый тикет.</strong> Если что-то снесли, оно не
+потеряно.</li>
+
+<li><strong>Старая MCP-сессия прекращается.</strong> Состав инструментов изменился, поэтому сервер
+ответит <code>404 session terminated: the tool set has changed</code>. Это не поломка: клиент
+обязан переподключиться и перечитать список. Нормальные клиенты делают это молча.</li>
+</ul>
+
+<h2>Кого пускают</h2>
+<p>Вход только по рабочему Google-аккаунту разрешённых доменов. Личная почта отклоняется с
+объяснением; отдельный адрес может добавить администратор поимённо.</p>
+
+<footer>NTK · <code>__URL__/mcp-claude</code></footer>
+</main>

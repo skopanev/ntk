@@ -105,6 +105,10 @@ async fn main() -> anyhow::Result<()> {
     vector::reconcile_ticks(&app);
     let router = Router::new()
         .route("/health", get(health))
+        // Инструкция подключения открыта БЕЗ входа, и это не упущение: её
+        // читают ровно до того, как смогли войти. Секретов в ней нет — адрес
+        // сервиса и так публичен, а доступ режется на стороне Google.
+        .route("/connect", get(connect))
         // Без ключа намеренно: клиент, который ещё не вошёл, тоже должен
         // уметь обновиться, а номер версии секретом не является.
         .route("/v1/version", get(release::current))
@@ -168,6 +172,18 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%port, "слушаю на localhost — наружу смотрит только Caddy");
     axum::serve(listener, router).await?;
     Ok(())
+}
+
+/// Как подключиться: одна страница, на которую можно дать ссылку.
+///
+/// Адрес сервиса подставляется из настройки, а не вписан в текст: инструкция
+/// с чужим доменом ведёт человека не туда, и заметно это станет через шаг.
+async fn connect(State(app): State<Arc<App>>) -> Response {
+    axum::response::Html(
+        include_str!("connect.html")
+            .replace("__URL__", app.cfg.public_url.trim_end_matches('/')),
+    )
+    .into_response()
 }
 
 /// Здоровье проверяется запросом к базе, а не фактом, что процесс жив:
