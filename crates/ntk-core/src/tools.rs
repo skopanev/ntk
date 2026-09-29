@@ -405,6 +405,20 @@ pub const ALL: &[Tool] = &[
         fields: &[WS, ID],
     },
     Tool {
+        name: "ntk_history",
+        title: "Ticket history",
+        desc: "Who changed this ticket, when, and what exactly. Every change is recorded by the database itself, so a change made outside the tools is here too — and is attributed to nobody, which is itself worth seeing. Newest first, paged with limit and offset; the answer says truncated and next_offset. A removed ticket still answers: \"where did it go\" is the question this exists for. Recording started on 29.09.2026 — an empty history means nothing was recorded, not that nothing happened.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        fields: &[
+            WS,
+            ID,
+            Field::opt("limit", Ty::Int, "50 by default, 500 at most."),
+            Field::opt("offset", Ty::Int, "Skip the first N — the next page. Take it from next_offset."),
+        ],
+    },
+    Tool {
         name: "ntk_restore",
         title: "Restore ticket",
         desc: "Bring back a removed ticket under its OWN id, with body, tags, status and dependencies intact. Removal only marks the ticket, so nothing was lost and nothing is recreated: the same row comes back, and links from commits and other tickets keep working. Search finds it again too. Refuses a ticket that was never removed, so a typo in the id cannot pass as success.",

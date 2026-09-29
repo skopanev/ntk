@@ -124,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/find", axum::routing::post(write::similar))
         .route("/v1/tickets/{id}", get(ticket_one).delete(write::remove))
         .route("/v1/tickets/{id}/deps", get(write::deps))
+        .route("/v1/tickets/{id}/history", get(write::history))
         .route("/v1/meta", get(write::meta))
         // PUT заменяет набор целиком, POST только добавляет. Разные глаголы
         // не для красоты: замена может убрать из действующих то, чего в
@@ -346,7 +347,7 @@ pub(crate) async fn ticket_one(
         return err(StatusCode::FORBIDDEN, "this key gives no access to that workspace");
     }
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "не удалось войти в воркспейс");
@@ -533,7 +534,7 @@ pub(crate) async fn tickets(
         }
     }
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "не удалось войти в воркспейс");

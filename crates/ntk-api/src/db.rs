@@ -48,9 +48,20 @@ fn valid_ident(s: &str) -> bool {
 /// We return the transaction itself rather than take a closure: the
 /// `AsyncFnOnce` version looked tidier, but its future cannot be proven `Send`,
 /// and axum refused such a handler. Plainer is sturdier.
+/// `actor` попадает в историю тикета.
+///
+/// Передаётся настройкой транзакции, а не аргументом запроса: историю пишет
+/// триггер, а триггер не видит, кто его вызвал. `SET LOCAL` откатывается
+/// вместе с транзакцией — на пуле соединений это обязательно, иначе имя
+/// осталось бы на соединении и подписало чужую правку.
+///
+/// Значение экранируется через `quote_literal`, а не подставляется в строку:
+/// имя приходит из базы, но в SQL оно всё равно попадает как данные, и
+/// доверие к источнику не заменяет проверки на границе.
 pub async fn begin<'a>(
     client: &'a mut deadpool_postgres::Client,
     workspace: &str,
+    actor: &str,
 ) -> Result<deadpool_postgres::Transaction<'a>> {
     if !valid_ident(workspace) {
         bail!("недопустимое имя воркспейса: {workspace:?}");
@@ -60,6 +71,8 @@ pub async fn begin<'a>(
         r#"SET LOCAL ROLE "ntk_ws_{workspace}"; SET LOCAL search_path = "{workspace}";"#
     ))
     .await?;
+    tx.execute("SELECT set_config('ntk.actor', $1, true)", &[&actor])
+        .await?;
     Ok(tx)
 }
 

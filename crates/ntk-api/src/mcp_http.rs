@@ -339,6 +339,18 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             body_text(write::patch(st, h, Path(id), Json(parsed)).await).await
         }
 
+        "ntk_history" => {
+            let mut q = vec![];
+            if let Some(w) = &ws { q.push(format!("workspace={}", urlencoding::encode(w))); }
+            for k in ["limit", "offset"] {
+                if let Some(v) = args.get(k).and_then(|v| v.as_i64()) { q.push(format!("{k}={v}")); }
+            }
+            match Query::try_from_uri(&format!("/?{}", q.join("&")).parse().unwrap()) {
+                Ok(Query(qq)) => body_text(write::history(st, h, Path(id), Query(qq)).await).await,
+                Err(e) => (false, e.to_string()),
+            }
+        }
+
         "ntk_deps" | "ntk_rm" | "ntk_restore" | "ntk_meta" => {
             let uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
             let Ok(Query(qq)) = Query::try_from_uri(&uri.parse().unwrap()) else {

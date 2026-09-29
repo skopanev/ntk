@@ -97,7 +97,7 @@ pub async fn next(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -168,7 +168,7 @@ pub async fn start(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -293,7 +293,7 @@ pub async fn patch(
             "body and body_append are not accepted together: either replace the body or append to it",
         );
     }
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -783,7 +783,7 @@ pub async fn similar(
     headers: HeaderMap,
     Json(p): Json<SimilarQ>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -803,7 +803,7 @@ pub async fn similar(
                 "id and text are not accepted together: either similar to a ticket, or similar to the text you sent",
             );
         }
-        let tx = match db::begin(&mut client, &ws).await {
+        let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
             Ok(t) => t,
             Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
@@ -841,7 +841,7 @@ pub async fn similar(
         tx.commit().await.ok();
         (t, b, Some(canonical))
     } else {
-        let tx = match db::begin(&mut client, &ws).await {
+        let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
             Ok(t) => t,
             Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
@@ -945,7 +945,7 @@ pub async fn create(
         if !mixed {
             None
         } else {
-            let mode = match db::begin(&mut client, &ws).await {
+            let mode = match db::begin(&mut client, &ws, &actor.user_id).await {
                 Ok(tx) => {
                     let m = text_language_policy(&tx).await;
                     tx.commit().await.ok();
@@ -1006,7 +1006,7 @@ pub async fn create(
     let mut search_skipped: Option<String> = None;
     if let Some(v) = searching {
         let (stopping, show_score, block_score) = {
-            match db::begin(&mut client, &ws).await {
+            match db::begin(&mut client, &ws, &actor.user_id).await {
                 Ok(tx) => {
                     let on = vector_enabled(&tx).await;
                     let pol = vector_stop_policy(&tx).await;
@@ -1103,7 +1103,7 @@ pub async fn create(
         }
     }
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -1296,11 +1296,11 @@ pub async fn deps(
     Path(id): Path<String>,
     Query(q): Query<Ws>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -1382,7 +1382,7 @@ pub async fn remove(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -1461,7 +1461,7 @@ pub async fn restore(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -1569,7 +1569,7 @@ pub async fn meta(
         }
     };
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -1698,7 +1698,7 @@ pub async fn set_modules(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -1975,11 +1975,11 @@ pub async fn create_project(
     Path(project): Path<String>,
     Json(p): Json<ProjectNew>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -2051,11 +2051,11 @@ pub async fn patch_project(
     Path(project): Path<String>,
     Json(p): Json<ProjectPatch>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -2137,7 +2137,7 @@ pub async fn move_project(
     Path(from): Path<String>,
     Json(p): Json<ProjectMove>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -2148,7 +2148,7 @@ pub async fn move_project(
     if to == from {
         return oops(StatusCode::BAD_REQUEST, "moving into the same project means nothing");
     }
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -2345,7 +2345,7 @@ pub async fn add_modules(
     Path(project): Path<String>,
     Json(p): Json<ModulesAdd>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, p.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -2361,7 +2361,7 @@ pub async fn add_modules(
         return oops(StatusCode::BAD_REQUEST, "name at least one module");
     }
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -3026,4 +3026,104 @@ mod append_refusal_tests {
         let m = append_refusal(0, 2500, 2000);
         assert!(m.contains("room for 2000"), "{m}");
     }
+}
+
+/// История тикета: кто, когда и что менял.
+///
+/// Отдаётся от свежих к старым и страницами: у долгоживущего тикета правок
+/// накапливаются сотни, а вопрос почти всегда про последнее — «что с ним
+/// случилось только что». Полная выгрузка нужна редко и стоит того, чтобы
+/// попросить её явно.
+///
+/// Удалённый тикет историю ОТДАЁТ. Он и заведён, чтобы отвечать на вопрос
+/// «куда делся»; молчание здесь было бы худшим из ответов.
+pub async fn history(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<HistoryQuery>,
+) -> Response {
+    let (mut client, actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+    };
+
+    let Ok(Some(row)) = tx
+        .query_opt(
+            "select id, deleted_at is not null from tickets where lower(id) = lower($1)",
+            &[&id],
+        )
+        .await
+    else {
+        return oops(StatusCode::NOT_FOUND, "no such ticket in this workspace");
+    };
+    let ticket_id: String = row.get(0);
+    let removed: bool = row.get(1);
+
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+    // Спрашиваем на строку больше запрошенного: лишняя не отдаётся, она лишь
+    // отвечает на «это всё?». Иначе полная страница неотличима от последней.
+    let probe = limit + 1;
+    let rows = match tx
+        .query(
+            "select at::text, actor, op, changes::text from ticket_history
+              where ticket_id = $1 order by id desc limit $2 offset $3",
+            &[&ticket_id, &probe, &offset],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "история тикета не прочиталась");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        }
+    };
+    let more = rows.len() as i64 > limit;
+    let entries: Vec<serde_json::Value> = rows
+        .iter()
+        .take(limit as usize)
+        .map(|r| {
+            let changes: String = r.get(3);
+            json!({
+                "at": r.get::<_, String>(0),
+                "actor": r.get::<_, String>(1),
+                "op": r.get::<_, String>(2),
+                "changes": serde_json::from_str::<serde_json::Value>(&changes).unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect();
+
+    let mut body = json!({
+        "id": ticket_id,
+        "removed": removed,
+        "history": entries,
+        "truncated": more,
+        "next_offset": more.then(|| offset + limit),
+    });
+    // История ведётся с 29.09.2026. У тикетов старше этой даты её нет, и
+    // пустой ответ читался бы как «ничего не меняли» — утверждение, которого
+    // мы сделать не можем.
+    if entries_are_silent(&body) {
+        body["reading"] = json!(
+            "No recorded history. Changes have been recorded since 29.09.2026; \
+             anything earlier left no trace, which is not the same as nothing having happened."
+        );
+    }
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+fn entries_are_silent(body: &serde_json::Value) -> bool {
+    body["history"].as_array().is_some_and(|a| a.is_empty())
+}
+
+#[derive(serde::Deserialize)]
+pub struct HistoryQuery {
+    workspace: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }

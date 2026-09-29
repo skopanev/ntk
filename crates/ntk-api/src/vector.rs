@@ -8,6 +8,12 @@
 //! Обращения к провайдеру ограничены глобальным потолком, потому что платит за
 //! них владелец, а не процесс.
 
+/// Кто подписывает правки фонового индексатора в истории тикета.
+///
+/// Имя процесса, а не человека, и это честно: его правки — техническая
+/// служба, и путать их с чьей-то работой нельзя.
+const VECTOR_ACTOR: &str = "ntk-vector";
+
 use anyhow::{bail, Context, Result};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -494,7 +500,7 @@ pub async fn similar(
 
     let ids: Vec<String> = hits.iter().map(|(id, _)| id.clone()).collect();
     let mut c = pool.get().await?;
-    let tx = crate::db::begin(&mut c, ws).await?;
+    let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
     // Отбор — тот же, что у списка и обхода, из общего модуля. Свой набор
     // условий здесь означал бы, что «тег infra» в find и в ls понимаются
     // по-разному, и узнать об этом можно было бы только случайно.
@@ -547,7 +553,7 @@ pub async fn reconcile(
     let points = v.all_points(ws).await?;
 
     let mut c = pool.get().await?;
-    let tx = crate::db::begin(&mut c, ws).await?;
+    let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
     // Отпечаток считает та же функция, что и триггер засева: своей копии
     // выражения здесь больше нет — разойдись они хоть в символе, сверка
     // объявила бы устаревшим весь воркспейс и переиндексировала бы его каждые
@@ -745,7 +751,7 @@ async fn one(
     // параллельность».
     let read = {
         let mut client = pool.get().await.context("the database is unavailable")?;
-        let tx = crate::db::begin(&mut client, ws).await?;
+        let tx = crate::db::begin(&mut client, ws, VECTOR_ACTOR).await?;
         let row = tx
             .query_opt(
                 "select uuid::text, project_id, title, body, deleted_at is not null
@@ -792,7 +798,7 @@ async fn one(
     if op == "delete" || deleted {
         v.delete_point(&uuid).await?;
         let mut c = pool.get().await?;
-        let tx = crate::db::begin(&mut c, ws).await?;
+        let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
         tx.execute("delete from vector_index_state where ticket_id = $1", &[&ticket_id]).await?;
         tx.execute("delete from vector_debt where ticket_id = $1", &[&ticket_id]).await?;
         tx.commit().await?;
@@ -806,7 +812,7 @@ async fn one(
         // старую версию — обновляем долг и уходим, следующий проход возьмёт
         // свежую.
         let mut c = pool.get().await?;
-        let tx = crate::db::begin(&mut c, ws).await?;
+        let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
         tx.execute(
             "update vector_debt set input_sha = $2, queued_at = now() where ticket_id = $1",
             &[&ticket_id, &sha],
@@ -821,7 +827,7 @@ async fn one(
 
     // Сверка ПОСЛЕ записи: тикет всё ещё жив и текст всё ещё тот?
     let mut c = pool.get().await?;
-    let tx = crate::db::begin(&mut c, ws).await?;
+    let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
     let now = tx
         .query_opt(
             "select title, body, deleted_at is not null from tickets where id = $1",
@@ -890,7 +896,7 @@ async fn one(
             tx.commit().await.ok();
             v.delete_point(&uuid).await?;
             let mut c2 = pool.get().await?;
-            let tx2 = crate::db::begin(&mut c2, ws).await?;
+            let tx2 = crate::db::begin(&mut c2, ws, VECTOR_ACTOR).await?;
             tx2.execute("delete from vector_index_state where ticket_id = $1", &[&ticket_id]).await?;
             tx2.execute("delete from vector_debt where ticket_id = $1", &[&ticket_id]).await?;
             tx2.commit().await?;
@@ -901,7 +907,7 @@ async fn one(
 
 async fn clear_debt(pool: &deadpool_postgres::Pool, ws: &str, id: &str) -> Result<()> {
     let mut c = pool.get().await?;
-    let tx = crate::db::begin(&mut c, ws).await?;
+    let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
     tx.execute("delete from vector_debt where ticket_id = $1", &[&id]).await?;
     tx.commit().await?;
     Ok(())
@@ -921,7 +927,7 @@ pub async fn enabled_workspaces(pool: &deadpool_postgres::Pool) -> Result<Vec<St
     for r in rows {
         let ws: String = r.get(0);
         let mut c = pool.get().await?;
-        let Ok(tx) = crate::db::begin(&mut c, &ws).await else { continue };
+        let Ok(tx) = crate::db::begin(&mut c, &ws, VECTOR_ACTOR).await else { continue };
         // Ошибку чтения политики не глотаем и здесь: воркспейс без миграций
         // не «выключен», он неизвестен, и молча пропустить его нельзя.
         match crate::write::vector_enabled(&tx).await {
@@ -1020,7 +1026,7 @@ async fn take_batch(
     ws: &str,
 ) -> Result<Vec<(String, String, Option<String>, Option<String>)>> {
     let mut c = pool.get().await?;
-    let tx = crate::db::begin(&mut c, ws).await?;
+    let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
     let rows = tx
         .query(
             "select ticket_id, op, input_sha, uuid from vector_debt
@@ -1042,7 +1048,7 @@ async fn bump_attempt(
     err: &str,
 ) -> Result<()> {
     let mut c = pool.get().await?;
-    let tx = crate::db::begin(&mut c, ws).await?;
+    let tx = crate::db::begin(&mut c, ws, VECTOR_ACTOR).await?;
     // Текст ошибки обрезаем: в него попадает ответ провайдера, и он бывает
     // длинным, а таблица долга не журнал.
     let short: String = err.chars().take(300).collect();

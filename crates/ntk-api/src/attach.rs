@@ -62,7 +62,7 @@ pub async fn begin(
     Path(ticket): Path<String>,
     Json(a): Json<AskUpload>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, a.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, a.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -79,7 +79,7 @@ pub async fn begin(
         .take(64)
         .collect();
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -130,7 +130,7 @@ pub async fn commit(
     Path(ticket): Path<String>,
     Json(d): Json<Done>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, d.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, d.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -156,7 +156,7 @@ pub async fn commit(
         return oops(StatusCode::BAD_REQUEST, "объект пуст");
     }
 
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };
@@ -198,11 +198,11 @@ pub async fn list(
     Path(ticket): Path<String>,
     Query(q): Query<Ws>,
 ) -> Response {
-    let (mut client, _actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
+    let (mut client, actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
     };

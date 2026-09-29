@@ -50,6 +50,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("032_text_language_policy", include_str!("../../../sql/032_text_language_policy.sql")),
     ("033_date_filter_indexes", include_str!("../../../sql/033_date_filter_indexes.sql")),
     ("034_refresh_token_family", include_str!("../../../sql/034_refresh_token_family.sql")),
+    ("035_ticket_history", include_str!("../../../sql/035_ticket_history.sql")),
 ];
 
 #[tokio::main]

@@ -172,7 +172,7 @@ pub async fn step(
         Ok(b) => b,
         Err(e) => return err(StatusCode::BAD_REQUEST, &e),
     };
-    let tx = match db::begin(&mut client, &ws).await {
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, workspace = %ws, "не удалось войти в воркспейс");
