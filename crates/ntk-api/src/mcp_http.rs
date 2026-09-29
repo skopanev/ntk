@@ -342,6 +342,19 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
             body_text(write::patch(st, h, Path(id), Json(parsed)).await).await
         }
 
+        "ntk_tags" => {
+            let mut q = vec![];
+            if let Some(w) = &ws { q.push(format!("workspace={}", urlencoding::encode(w))); }
+            if let Some(v) = s(args, "contains") { q.push(format!("contains={}", urlencoding::encode(&v))); }
+            for k in ["limit", "offset"] {
+                if let Some(v) = args.get(k).and_then(|v| v.as_i64()) { q.push(format!("{k}={v}")); }
+            }
+            match Query::try_from_uri(&format!("/?{}", q.join("&")).parse().unwrap()) {
+                Ok(Query(qq)) => body_text(write::tags(st, h, Query(qq)).await).await,
+                Err(e) => (false, e.to_string()),
+            }
+        }
+
         "ntk_history" => {
             let mut q = vec![];
             if let Some(w) = &ws { q.push(format!("workspace={}", urlencoding::encode(w))); }

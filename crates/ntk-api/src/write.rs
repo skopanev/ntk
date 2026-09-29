@@ -3190,3 +3190,93 @@ pub async fn at_revision(
     let (actor, at, op) = last.unwrap();
     Ok(Some((serde_json::Value::Object(state), actor, at, op)))
 }
+
+/// Какие теги вообще есть в воркспейсе и насколько ходовой каждый.
+///
+/// Справочника тегов у нас нет и не планируется: тег заводится тем, что его
+/// кто-то поставил. Цена свободы — их становится много и они расходятся
+/// написанием; на живом воркспейсе их полторы тысячи. Поэтому здесь два
+/// ответа сразу: список с пагинацией и ЧИСЛО ТИКЕТОВ у каждого — без него
+/// нельзя отличить рабочий тег от чьей-то опечатки, поставленной однажды.
+///
+/// Порядок — по убыванию частоты, потом по имени. Первая страница отвечает на
+/// вопрос «какими тегами тут пользуются», а не «какие бывают в алфавите».
+pub async fn tags(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Query(q): Query<TagsQuery>,
+) -> Response {
+    let (mut client, actor, ws) = match enter(&app, &headers, q.workspace.as_deref()).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tx = match db::begin(&mut client, &ws, &actor.user_id).await {
+        Ok(t) => t,
+        Err(_) => return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+    };
+
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+    // Подстрока, а не точное имя: теги живут семействами — initiative:infra и
+    // infra про одно и то же, и спрашивающий про infra хочет оба.
+    let needle = q.contains.clone().unwrap_or_default();
+    let all = needle.is_empty();
+
+    let total: i64 = match tx
+        .query_one(
+            "select count(*) from (select distinct tag from tickets, unnest(tags) as tag
+              where deleted_at is null and ($1 or tag ilike '%' || $2 || '%')) t",
+            &[&all, &needle],
+        )
+        .await
+    {
+        Ok(r) => r.get(0),
+        Err(e) => {
+            tracing::error!(error = %e, "счёт тегов не прошёл");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        }
+    };
+
+    let rows = match tx
+        .query(
+            "select tag, count(*) as n from tickets, unnest(tags) as tag
+              where deleted_at is null and ($1 or tag ilike '%' || $2 || '%')
+              group by tag order by n desc, tag limit $3 offset $4",
+            &[&all, &needle, &limit, &offset],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "список тегов не прочитался");
+            return oops(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        }
+    };
+
+    let tags: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| json!({"tag": r.get::<_, String>(0), "tickets": r.get::<_, i64>(1)}))
+        .collect();
+    let shown = offset + tags.len() as i64;
+    let more = shown < total;
+    let mut body = json!({
+        "tags": tags,
+        "total": total,
+        "truncated": more,
+        "next_offset": more.then_some(shown),
+    });
+    if more {
+        body["reading"] = json!(format!(
+            "{total} tags in all; repeat with offset={shown} for the next page, or narrow with contains."
+        ));
+    }
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct TagsQuery {
+    workspace: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    contains: Option<String>,
+}

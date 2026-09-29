@@ -126,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/tickets/{id}/deps", get(write::deps))
         .route("/v1/tickets/{id}/history", get(write::history))
         .route("/v1/meta", get(write::meta))
+        .route("/v1/tags", get(write::tags))
         // PUT заменяет набор целиком, POST только добавляет. Разные глаголы
         // не для красоты: замена может убрать из действующих то, чего в
         // присланном списке не оказалось, добавление — не может никогда.

@@ -409,6 +409,20 @@ pub const ALL: &[Tool] = &[
         fields: &[WS, ID],
     },
     Tool {
+        name: "ntk_tags",
+        title: "List tags",
+        desc: "Which tags exist in the workspace and how many tickets carry each. There is no tag dictionary — a tag exists because somebody put it on a ticket — so the count is the only way to tell a working tag from somebody's one-off typo. Ordered by how many tickets carry it, then by name: the first page answers \"what do people here actually tag with\". Paged 100 at a time; a live workspace holds over fifteen hundred distinct tags.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        fields: &[
+            WS,
+            Field::opt("contains", Ty::Str, "Only tags containing this text, case-insensitive. Tags live in families — \"infra\" also finds \"initiative:infra\" — and asking for a family is the usual reason to look."),
+            Field::opt("limit", Ty::Int, "100 by default, 500 at most."),
+            Field::opt("offset", Ty::Int, "Skip the first N — the next page. Take it from next_offset."),
+        ],
+    },
+    Tool {
         name: "ntk_history",
         title: "Ticket history",
         desc: "Who changed this ticket, when, and what exactly. Every change is recorded by the database itself, so a change made outside the tools is here too — and is attributed to nobody, which is itself worth seeing. Newest first, paged with limit and offset; the answer says truncated and next_offset. A removed ticket still answers: \"where did it go\" is the question this exists for. Recording started on 29.09.2026 — an empty history means nothing was recorded, not that nothing happened.",
