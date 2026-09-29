@@ -304,6 +304,12 @@ struct TicketsQuery {
     /// двигает любая правка тела или тега, и тикет, которому вчера поправили
     /// опечатку, выглядел бы свежевзятым.
     stale: Option<i64>,
+    /// Показать тикет таким, каким он был на эту ревизию.
+    ///
+    /// По умолчанию отдаётся последняя — вопрос «как сейчас» задают на порядок
+    /// чаще. Сколько всего ревизий, видно в каждом ответе: иначе о том, что
+    /// тикет переписывали, пришлось бы догадываться.
+    revision: Option<i64>,
 }
 
 fn default_limit() -> i64 {
@@ -410,7 +416,58 @@ pub(crate) async fn ticket_one(
         closed_at: r.get(15),
         current_status_at: r.get(16),
     };
-    (StatusCode::OK, Json(serde_json::json!({ "ticket": ticket }))).into_response()
+    // Сколько ревизий — говорим ВСЕГДА, даже когда отдаём последнюю. Это один
+    // счётчик, а без него «тикет переписали трижды» остаётся незаметным, пока
+    // кто-нибудь не спросит историю нарочно.
+    let revisions: i64 = tx
+        .query_one(
+            "select count(*) from ticket_history where ticket_id = $1",
+            &[&ticket.id],
+        )
+        .await
+        .map(|r| r.get(0))
+        .unwrap_or(0);
+
+    let Some(want) = q.revision else {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ticket": ticket,
+                "revision_count": revisions,
+                "current_revision": revisions,
+            })),
+        )
+            .into_response();
+    };
+
+    if want < 1 || want > revisions {
+        return err(
+            StatusCode::NOT_FOUND,
+            &format!("no revision {want}: this ticket has {revisions}"),
+        );
+    }
+    match write::at_revision(&tx, &ticket.id, want).await {
+        Ok(Some((state, actor, at, op))) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ticket": state,
+                "revision": want,
+                "revision_count": revisions,
+                "current_revision": revisions,
+                "changed_by": actor,
+                "changed_at": at,
+                "change": op,
+                "reading": "This is the ticket as it stood after that change, rebuilt from the history. \
+                            Dependencies and attachments are NOT part of it — they are shown for the ticket as it is now.",
+            })),
+        )
+            .into_response(),
+        Ok(None) => err(StatusCode::NOT_FOUND, "no recorded history for this ticket"),
+        Err(e) => {
+            tracing::error!(error = %e, "ревизия не собралась");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
 }
 
 pub(crate) async fn tickets(

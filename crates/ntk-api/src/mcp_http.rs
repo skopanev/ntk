@@ -208,7 +208,10 @@ async fn call_tool(app: &Arc<App>, token: &str, name: &str, args: &Value) -> (bo
         }
 
         "ntk_show" => {
-            let uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
+            let mut uri = format!("/?workspace={}", urlencoding::encode(ws.as_deref().unwrap_or("")));
+            if let Some(v) = args.get("revision").and_then(|v| v.as_i64()) {
+                uri.push_str(&format!("&revision={v}"));
+            }
             match Query::try_from_uri(&uri.parse().unwrap()) {
                 Ok(Query(qq)) => body_text(crate::ticket_one(st, h, Path(id), Query(qq)).await).await,
                 Err(e) => (false, e.to_string()),

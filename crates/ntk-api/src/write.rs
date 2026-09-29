@@ -3064,6 +3064,11 @@ pub async fn history(
     let ticket_id: String = row.get(0);
     let removed: bool = row.get(1);
 
+    let total: i64 = tx
+        .query_one("select count(*) from ticket_history where ticket_id = $1", &[&ticket_id])
+        .await
+        .map(|r| r.get(0))
+        .unwrap_or(0);
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
     // Спрашиваем на строку больше запрошенного: лишняя не отдаётся, она лишь
@@ -3071,8 +3076,11 @@ pub async fn history(
     let probe = limit + 1;
     let rows = match tx
         .query(
-            "select at::text, actor, op, changes::text from ticket_history
-              where ticket_id = $1 order by id desc limit $2 offset $3",
+            "select at::text, actor, op, changes::text, rev from (
+               select id, at, actor, op, changes,
+                      row_number() over (order by id) as rev
+                 from ticket_history where ticket_id = $1) h
+              order by id desc limit $2 offset $3",
             &[&ticket_id, &probe, &offset],
         )
         .await
@@ -3090,6 +3098,10 @@ pub async fn history(
         .map(|r| {
             let changes: String = r.get(3);
             json!({
+                // Номер, по которому эту ревизию можно попросить целиком:
+                // ntk_show с revision. Без него список читается, но сослаться
+                // на строку нечем.
+                "revision": r.get::<_, i64>(4),
                 "at": r.get::<_, String>(0),
                 "actor": r.get::<_, String>(1),
                 "op": r.get::<_, String>(2),
@@ -3101,6 +3113,7 @@ pub async fn history(
     let mut body = json!({
         "id": ticket_id,
         "removed": removed,
+        "revision_count": total,
         "history": entries,
         "truncated": more,
         "next_offset": more.then(|| offset + limit),
@@ -3126,4 +3139,54 @@ pub struct HistoryQuery {
     workspace: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
+}
+
+/// Состояние тикета на указанную ревизию.
+///
+/// Ревизии не хранятся снимками — они СОБИРАЮТСЯ: первая запись истории несёт
+/// тикет целиком, каждая следующая несёт только изменённые поля. Снимок на
+/// каждую правку стоил бы тела тикета в каждой строке, а тело у нас до 2257
+/// знаков; собрать же состояние — это проиграть десяток мелких записей.
+///
+/// Номер ревизии — порядковый номер записи в истории этого тикета. Он
+/// устойчив, потому что история дописывается и не меняется: запись не
+/// исчезнет и не переставится, и ссылка «ревизия 5» будет означать то же
+/// самое через год.
+pub async fn at_revision(
+    tx: &deadpool_postgres::Transaction<'_>,
+    ticket_id: &str,
+    upto: i64,
+) -> anyhow::Result<Option<(serde_json::Value, String, String, String)>> {
+    let rows = tx
+        .query(
+            "select rev, actor, at::text, op, changes::text from (
+               select row_number() over (order by id) as rev, actor, at, op, changes
+                 from ticket_history where ticket_id = $1) h
+              where rev <= $2 order by rev",
+            &[&ticket_id, &upto],
+        )
+        .await?;
+    let mut state = serde_json::Map::new();
+    let mut last: Option<(String, String, String)> = None;
+    for row in &rows {
+        let op: String = row.get(3);
+        let changes: serde_json::Value = serde_json::from_str(&row.get::<_, String>(4))?;
+        match op.as_str() {
+            // Снимок целиком: начало цепочки либо запись об удалении строки.
+            "create" | "delete" if changes.get("id").is_some() => {
+                state = changes.as_object().cloned().unwrap_or_default();
+            }
+            _ => {
+                for (field, pair) in changes.as_object().into_iter().flatten() {
+                    state.insert(field.clone(), pair["to"].clone());
+                }
+            }
+        }
+        last = Some((row.get(1), row.get(2), op));
+    }
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let (actor, at, op) = last.unwrap();
+    Ok(Some((serde_json::Value::Object(state), actor, at, op)))
 }

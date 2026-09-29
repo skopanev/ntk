@@ -281,11 +281,15 @@ pub const ALL: &[Tool] = &[
     Tool {
         name: "ntk_show",
         title: "Show ticket",
-        desc: "The whole ticket: fields, body, dependencies, who holds it and what it waits for.",
+        desc: "The whole ticket: fields, body, dependencies, who holds it and what it waits for. Every answer carries revision_count — how many times the ticket was changed. Pass revision to see it as it stood after a given change; ntk_history lists them with author, time and what moved.",
         read_only: true,
         destructive: false,
         idempotent: true,
-        fields: &[WS, ID],
+        fields: &[
+            WS,
+            ID,
+            Field::opt("revision", Ty::Int, "Show the ticket as it stood after this change, counting from 1. Omit it for the current state — that is what is asked for almost always. Out of range is a refusal naming how many there are, not an empty answer."),
+        ],
     },
     Tool {
         name: "ntk_next",
