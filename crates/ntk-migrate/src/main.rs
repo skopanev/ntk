@@ -51,6 +51,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("033_date_filter_indexes", include_str!("../../../sql/033_date_filter_indexes.sql")),
     ("034_refresh_token_family", include_str!("../../../sql/034_refresh_token_family.sql")),
     ("035_ticket_history", include_str!("../../../sql/035_ticket_history.sql")),
+    ("036_history_schema_qualified", include_str!("../../../sql/036_history_schema_qualified.sql")),
 ];
 
 #[tokio::main]
