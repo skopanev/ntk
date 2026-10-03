@@ -634,7 +634,11 @@ pub async fn endpoint(State(app): State<Arc<App>>, headers: HeaderMap, body: Str
                 // перечитывать список ему незачем.
                 "capabilities": {"tools": {"listChanged": true}},
                 "serverInfo": {"name": "ntk", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": mcp_oauth::AUTH_HELP
+                // Две разные вещи в одном поле: как войти и как писать.
+                // Клиент читает инструкции один раз при подключении, поэтому
+                // правила письма стоят здесь, а не в каждом поле: в полях
+                // осталась ссылка на них и самое главное одной строкой.
+                "instructions": format!("{}\n\n{}", mcp_oauth::AUTH_HELP, ntk_core::tools::WRITING)
             }));
             if let Ok(v) = axum::http::HeaderValue::from_str(&sid) {
                 r.headers_mut().insert("mcp-session-id", v);

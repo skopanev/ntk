@@ -26,6 +26,23 @@
 use serde_json::{json, Map, Value};
 mod attachments;
 
+/// How to write ticket text. Goes into the server instructions, so every
+/// client reads it once at connect time instead of in every field.
+///
+/// The standard is ASD-STE100 Simplified Technical English, Issue 9. It exists
+/// because tickets are read by people under time pressure and by models with a
+/// budget. A long sentence costs both: the reader loses the thread, the model
+/// loses the instruction among the words around it.
+///
+/// Eighty per cent, not a hundred: a rule that forbids the exact word for a
+/// thing makes the text wrong, and wrong is worse than complex.
+///
+/// English is the default, not the only language. A ticket is read by people
+/// and by models that work in different tongues, and one language in the
+/// tracker costs less than a translation at every reading. What a person said
+/// stays as that person said it: a quotation translated is no longer evidence.
+pub const WRITING: &str = "Write ticket text in ENGLISH. Russian is allowed but is not the default, and the same rules apply to it with plain common words. Text copied from a person and intake stay in the language they came in. Do not translate text that is already written.\nFollow ASD-STE100 Simplified Technical English, Issue 9. At least 80 per cent of the sentences must obey these rules. Break a rule only when the standard makes the text less exact.\n1. Short sentences. 20 words at most in an instruction, 25 in a description.\n2. One instruction per sentence. Use the imperative form for instructions.\n3. Active voice. Use the passive only when the agent is unknown.\n4. A verb for an action, not a noun. Write \"check the log\", not \"do a check of the log\".\n5. Simple tenses only. No phrasal verbs.\n6. One term for one thing, one meaning for each word. No slang, no jargon.\n7. Three words at most in a multi-word noun.\n8. No omitted words, no contractions. Use articles.\n9. One topic per paragraph, six sentences at most.\n10. Vertical lists for complex text. No semicolon.\n11. A warning starts with the command or the condition, then gives the risk.\nThe rules do not apply to code, commands, identifiers, quotations, logs, or text copied from a person. Reference: https://www.asd-ste100.org/";
+
 /// Title limit, in characters.
 pub const TITLE_MAX: usize = 256;
 /// Body limit, in characters.
@@ -329,8 +346,8 @@ pub const ALL: &[Tool] = &[
         fields: &[
             WS,
             Field::req("project", Ty::Str, "Project — the prefix of the ticket identifier."),
-            Field::req("title", Ty::Str, "Title, at most 256 characters. English.").capped(TITLE_MAX),
-            Field::opt("body", Ty::Str, "Body in markdown, at most 2000 characters. English.").capped(BODY_MAX),
+            Field::req("title", Ty::Str, "Title, at most 256 characters. Simplified Technical English: one short sentence, active voice, no jargon. The server instructions carry the rules.").capped(TITLE_MAX),
+            Field::opt("body", Ty::Str, "Body in markdown, at most 2000 characters. Simplified Technical English: short sentences, active voice, one instruction per sentence, vertical lists instead of long ones. The server instructions carry the rules.").capped(BODY_MAX),
             ASSIGNEE_SET,
             Field::opt("tags", Ty::StrList, "Tags, unsigned here: creating sets the whole set at once."),
             Field::opt("module", Ty::Str, "Module — the unit of work inside a project. ntk_meta lists the allowed ones; do not guess."),
@@ -352,9 +369,9 @@ pub const ALL: &[Tool] = &[
             WS,
             ID,
             Field::opt("status", Ty::Str, "New status. Changing a ticket outside the todo group needs force."),
-            Field::opt("title", Ty::Str, "Title, at most 256 characters. English.").capped(TITLE_MAX),
-            Field::opt("body", Ty::Str, "The whole body, at most 2000 characters. REPLACES the previous one: to add a line use body_append. English.").capped(BODY_MAX),
-            Field::opt("body_append", Ty::Str, "Append to the end of the body without touching what is written — the two are separated by a BLANK LINE, so the addition reads as its own paragraph rather than running into the last sentence. Not accepted together with body; body REPLACES, this one adds. The 2000 limit counts the RESULT of the join, separator included: appending into a full ticket is refused, not silently truncated."),
+            Field::opt("title", Ty::Str, "Title, at most 256 characters. Simplified Technical English: one short sentence, active voice, no jargon. The server instructions carry the rules.").capped(TITLE_MAX),
+            Field::opt("body", Ty::Str, "The whole body, at most 2000 characters. REPLACES the previous one: to add a line use body_append. Simplified Technical English: short sentences, active voice, one instruction per sentence. The server instructions carry the rules.").capped(BODY_MAX),
+            Field::opt("body_append", Ty::Str, "Append to the end of the body without touching what is written. Simplified Technical English applies here too — see the server instructions — the two are separated by a BLANK LINE, so the addition reads as its own paragraph rather than running into the last sentence. Not accepted together with body; body REPLACES, this one adds. The 2000 limit counts the RESULT of the join, separator included: appending into a full ticket is refused, not silently truncated."),
             ASSIGNEE_SET,
             Field::opt("tag_edits", Ty::StrList, "Every edit carries a sign: [\"+alpha\",\"-legacy\"]. The sign is required, otherwise \"add\" will one day turn out to be \"replace everything\"."),
             Field::opt("dep_edits", Ty::StrList, "Dependency edits, each with a sign: [\"+proj-abc\",\"-proj-xyz\"]. Plus starts waiting for that ticket, minus stops. The sign is required for the same reason as on tags: a bare list would one day mean \"replace them all\" and links would vanish silently. The target must exist — an edge to nowhere turns \"waiting for that ticket\" into \"waiting for nothing\", and nobody finds out."),
