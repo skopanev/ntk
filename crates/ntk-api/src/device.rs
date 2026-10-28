@@ -11,7 +11,7 @@
 //! a single collection attempt.
 
 use anyhow::{bail, Result};
-use rand::Rng;
+use rand::RngExt;
 use sha2::{Digest, Sha256};
 
 /// No look-alike characters: people mix up 0/O and 1/I/L when reading a code aloud.
@@ -24,16 +24,16 @@ pub struct Started {
 }
 
 pub fn generate() -> Started {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let pick = |rng: &mut rand::rngs::ThreadRng, n: usize| -> String {
-        (0..n).map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char).collect()
+        (0..n).map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char).collect()
     };
     let code = format!("{}-{}", pick(&mut rng, 4), pick(&mut rng, 4));
     // The device secret is long: a program reads it, not a person.
     let device_secret: String = (0..48)
         .map(|_| {
             const HEX: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-            HEX[rand::thread_rng().gen_range(0..HEX.len())] as char
+            HEX[rand::rng().random_range(0..HEX.len())] as char
         })
         .collect();
     Started { code, device_secret }
@@ -60,9 +60,9 @@ pub fn normalize(input: &str) -> String {
 
 /// The key handed to a person after a successful sign-in.
 pub fn new_api_key() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let body: String = (0..40).map(|_| ALPHA[rng.gen_range(0..ALPHA.len())] as char).collect();
+    let body: String = (0..40).map(|_| ALPHA[rng.random_range(0..ALPHA.len())] as char).collect();
     format!("ntk_{body}")
 }
 

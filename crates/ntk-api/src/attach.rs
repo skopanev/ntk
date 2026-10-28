@@ -95,9 +95,9 @@ pub async fn begin(
         return oops(StatusCode::NOT_FOUND, "no such ticket");
     }
     let uniq: String = {
-        use rand::Rng;
-        let mut r = rand::thread_rng();
-        (0..16).map(|_| char::from(b"abcdefghijklmnopqrstuvwxyz0123456789"[r.gen_range(0..36)])).collect()
+        use rand::RngExt;
+        let mut r = rand::rng();
+        (0..16).map(|_| char::from(b"abcdefghijklmnopqrstuvwxyz0123456789"[r.random_range(0..36)])).collect()
     };
     let key = format!("attachments/{ws}/{ticket}/{uniq}-{safe}");
 

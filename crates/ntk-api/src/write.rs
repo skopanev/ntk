@@ -18,10 +18,10 @@ use crate::{auth, claim, db, App};
 /// клиента — идентификатор набирают руками и ищут по префиксу, поэтому uuid
 /// сюда не годится.
 fn new_tail() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     const ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut r = rand::thread_rng();
-    (0..10).map(|_| ALPHABET[r.gen_range(0..ALPHABET.len())] as char).collect()
+    let mut r = rand::rng();
+    (0..10).map(|_| ALPHABET[r.random_range(0..ALPHABET.len())] as char).collect()
 }
 
 fn oops(c: StatusCode, m: &str) -> Response {
@@ -2753,7 +2753,7 @@ pub(crate) fn embed_sha(input: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(input.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 /// Ставит долг индексации В ТОЙ ЖЕ транзакции, что и правка тикета.

@@ -19,9 +19,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.86"
+version = "0.5.87"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 repository = "git@github.com:skopanev/ntk.git"
 publish = false
 
@@ -37,14 +37,14 @@ tokio-postgres = "0.7"
 axum = "0.8"
 deadpool-postgres = "0.14"
 hex = "0.4"
-sha2 = "0.10"
-hmac = "0.12"
-tower-http = { version = "0.6", features = ["trace"] }
+sha2 = "0.11"
+hmac = "0.13"
+tower-http = { version = "0.7", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-jsonwebtoken = "9"
-rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form", "query"] }
 urlencoding = "2"
 rmcp = { version = "0.8", features = ["server", "transport-io"] }
 schemars = "1"

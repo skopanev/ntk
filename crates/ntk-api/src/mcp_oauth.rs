@@ -23,7 +23,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Form, Json,
 };
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -39,8 +39,8 @@ pub fn resource_url(base: &str) -> String {
 
 fn rnd(n: usize) -> String {
     const A: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut r = rand::thread_rng();
-    (0..n).map(|_| A[r.gen_range(0..A.len())] as char).collect()
+    let mut r = rand::rng();
+    (0..n).map(|_| A[r.random_range(0..A.len())] as char).collect()
 }
 
 /// The marker on the Claude sign-in state. The Google callback is shared with

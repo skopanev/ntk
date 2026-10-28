@@ -78,10 +78,10 @@ fn tools_tag() -> &'static str {
 }
 
 fn rnd() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     const A: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut r = rand::thread_rng();
-    (0..16).map(|_| A[r.gen_range(0..A.len())] as char).collect()
+    let mut r = rand::rng();
+    (0..16).map(|_| A[r.random_range(0..A.len())] as char).collect()
 }
 
 fn s(v: &Value, k: &str) -> Option<String> {

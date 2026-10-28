@@ -23,6 +23,6 @@ jsonwebtoken.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 urlencoding.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"

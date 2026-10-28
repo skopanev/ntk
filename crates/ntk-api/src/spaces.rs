@@ -7,7 +7,7 @@
 //! here in the parameters, so the link can simply be handed to a client.
 
 use anyhow::Result;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
